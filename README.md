@@ -100,3 +100,18 @@ faithful emulation of remctl's JSON contract backed by a JSON state file
   pane, workers for loading and mutations.
 - `remtui/screens.py` — modal add/edit form, delete confirmation, help.
 - `remtui/widgets.py` — reminder rows, sidebar options, view header.
+
+## Acknowledgements
+
+remtui exists because of [remctl](https://github.com/viticci/remctl), the
+excellent Apple Reminders CLI by [Federico Viticci](https://www.macstories.net).
+Everything hard about talking to Reminders — fast reads straight from the
+local store, writes that respect iCloud sync, sections, tags, smart lists,
+and a clean, scriptable JSON interface designed with automation and AI
+agents in mind — is remctl's work. This project is just a friendly terminal
+face on top of it.
+
+If you find remtui useful, the thanks belong upstream: go star remctl, and
+check out Federico's writing at [MacStories](https://www.macstories.net).
+Thank you, Federico, for building such a thoughtful, well-crafted tool and
+sharing it with the community.
