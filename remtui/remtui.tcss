@@ -1,0 +1,207 @@
+/* ── layout ─────────────────────────────────────────────────────────── */
+
+#body {
+    height: 1fr;
+}
+
+#sidebar {
+    width: 30;
+    min-width: 22;
+    max-width: 40;
+    background: $surface;
+    border-right: vkey $panel;
+    padding: 1 0 0 0;
+}
+
+#nav {
+    background: transparent;
+    border: none;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+#nav:focus {
+    border: none;
+    background: transparent;
+}
+
+#main {
+    background: $background;
+}
+
+/* ── reminder list ──────────────────────────────────────────────────── */
+
+#reminders {
+    background: transparent;
+    padding: 0 1 1 1;
+    scrollbar-size-vertical: 1;
+}
+
+ReminderItem {
+    layout: horizontal;
+    height: auto;
+    padding: 0 1;
+}
+
+/* The app stylesheet overrides ListView's built-in cursor styling, so the
+   selection states are (re)defined here: a visible gray bar when the pane
+   is unfocused, a primary tint when it has focus. */
+#reminders > ReminderItem.-highlight {
+    background: $panel;
+}
+
+#reminders:focus > ReminderItem.-highlight {
+    background: $primary 35%;
+}
+
+#reminders > ReminderItem.-hovered {
+    background: $boost;
+}
+
+ReminderItem .check {
+    width: 3;
+}
+
+ReminderItem .body {
+    width: 1fr;
+    height: auto;
+}
+
+ReminderItem .meta {
+    margin-left: 2;
+}
+
+ReminderItem.-done {
+    opacity: 55%;
+}
+
+#filter {
+    display: none;
+    margin: 0 2;
+    border: tall $primary;
+}
+
+#filter.-visible {
+    display: block;
+}
+
+#empty {
+    display: none;
+    height: 1fr;
+    content-align: center middle;
+    color: $text-muted;
+    text-style: italic;
+}
+
+#empty.-visible {
+    display: block;
+}
+
+/* ── modal dialogs ──────────────────────────────────────────────────── */
+
+ReminderFormScreen,
+ConfirmDeleteScreen,
+HelpScreen {
+    align: center middle;
+}
+
+#dialog {
+    width: 62;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    background: $surface;
+    padding: 0 2 1 2;
+}
+
+.form-dialog {
+    border: round $primary;
+    border-title-color: $primary;
+    border-title-style: bold;
+}
+
+.form-dialog Input,
+.form-dialog Select,
+.form-dialog TextArea {
+    border-title-color: $text-muted;
+}
+
+.confirm-dialog {
+    width: 58;
+    border: round $error;
+}
+
+.help-dialog {
+    width: 60;
+    border: round $accent;
+}
+
+#confirm-title, #help-title {
+    text-style: bold;
+    color: $text;
+    padding-bottom: 1;
+}
+
+.confirm-dialog, .help-dialog {
+    padding-top: 1;
+}
+
+.form-row {
+    height: auto;
+}
+
+.form-row > * {
+    width: 1fr;
+}
+
+.form-row > *:first-child {
+    margin-right: 2;
+}
+
+#f-notes {
+    height: 4;
+    border: tall $border-blurred;
+}
+
+#f-notes:focus {
+    border: tall $border;
+}
+
+#f-flag {
+    background: transparent;
+    border: none;
+    margin-top: 1;
+}
+
+#form-error {
+    display: none;
+    color: $text-error;
+    margin-top: 1;
+}
+
+#form-error.-visible {
+    display: block;
+}
+
+.form-buttons {
+    height: auto;
+    align-horizontal: right;
+}
+
+.form-buttons Button {
+    margin-left: 2;
+    min-width: 12;
+}
+
+#confirm-message {
+    color: $text-muted;
+}
+
+#help-body {
+    height: auto;
+}
+
+#help-footer {
+    margin-top: 1;
+    text-align: center;
+}
