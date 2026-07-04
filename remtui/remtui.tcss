@@ -13,6 +13,12 @@
     padding: 1 0 0 0;
 }
 
+#logo {
+    height: auto;
+    padding: 0 1 1 1;
+    text-align: center;
+}
+
 #nav {
     background: transparent;
     border: none;

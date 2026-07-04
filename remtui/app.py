@@ -25,6 +25,7 @@ from remtui.widgets import (
     ReminderItem,
     ViewHeader,
     list_option,
+    logo,
     nav_header,
     smart_option,
 )
@@ -99,6 +100,7 @@ class RemTuiApp(App[None]):
         yield Header(show_clock=True)
         with Horizontal(id="body"):
             with Vertical(id="sidebar"):
+                yield Static(logo(), id="logo")
                 yield OptionList(id="nav")
             with Vertical(id="main"):
                 yield ViewHeader(id="view-header")
@@ -110,9 +112,17 @@ class RemTuiApp(App[None]):
     def on_mount(self) -> None:
         self.register_theme(REMTUI_THEME)
         self.theme = "remtui"
+        self._fit_logo()
         self._build_nav()
         self.query_one("#nav", OptionList).focus()
         self.refresh_lists()
+
+    def on_resize(self) -> None:
+        self._fit_logo()
+
+    def _fit_logo(self) -> None:
+        # On short terminals the sidebar space belongs to the lists.
+        self.query_one("#logo", Static).display = self.size.height >= 20
 
     # -- sidebar ------------------------------------------------------------
 

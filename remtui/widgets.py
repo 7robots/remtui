@@ -43,6 +43,33 @@ SMART_VIEWS = (
 )
 
 
+# Classic Apple logo rainbow, top to bottom.
+APPLE_RAINBOW = ("#61BB46", "#FDB827", "#F5821F", "#E03A3E", "#963D97", "#009DDC")
+
+# "RemTUI" in box-drawing characters, one glyph per letter.
+_WORDMARK = (
+    ("╦═╗", "╠╦╝", "╩╚═"),
+    ("┌─┐", "├┤ ", "└─┘"),
+    ("┌┬┐", "│││", "┴ ┴"),
+    ("╔╦╗", " ║ ", " ╩ "),
+    ("╦ ╦", "║ ║", "╚═╝"),
+    ("╦", "║", "╩"),
+)
+
+
+def logo() -> Text:
+    """The sidebar logo: the RemTUI wordmark in Apple-rainbow colors."""
+    out = Text()
+    for row in range(3):
+        if row:
+            out.append("\n")
+        for index, (glyph, color) in enumerate(zip(_WORDMARK, APPLE_RAINBOW)):
+            if index:
+                out.append(" ")
+            out.append(glyph[row], style=f"bold {color}")
+    return out
+
+
 class ReminderItem(ListItem):
     """One reminder row: check glyph | title + details | flags + due date."""
 
