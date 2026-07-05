@@ -63,7 +63,7 @@ Point at a specific remctl binary with `--remctl /path/to/remctl` or
 | `j`/`k`, `↑`/`↓` | move |
 | `←`/`h` / `→`/`l`, `tab` | switch between sidebar and reminders |
 | `g` / `G` | top / bottom |
-| `a` | add reminder |
+| `a` / `n` | add reminder |
 | `e` / `enter` | edit selected |
 | `space` | toggle done |
 | `d` / `⌫` | delete (asks first) |
@@ -78,7 +78,40 @@ Point at a specific remctl binary with `--remctl /path/to/remctl` or
 
 Due dates in the add/edit form accept remctl's formats: `2026-08-01`,
 `tomorrow 09:30`, `today at 3pm`, `fri 15:00`, `+3d` — leave blank for none;
-clearing the field on edit removes the due date.
+clearing the field on edit removes the due date. In the add/edit form,
+`ctrl+e` opens the notes field in your `$EDITOR` (vim by default).
+
+### Configuration
+
+`~/.config/remtui/config.toml` (created with commented defaults on first
+run; honors `XDG_CONFIG_HOME`):
+
+```toml
+[keys]
+profile = "vim"            # "default" or "vim"
+"reminder.add" = "a,n"     # optional per-binding overrides by binding id
+```
+
+An override replaces the binding's keys entirely (comma-separate to keep
+several). Binding ids: `reminder.add`, `reminder.edit`, `reminder.done`,
+`reminder.delete`, `reminder.flag`, `reminder.priority`, `view.filter`,
+`view.show-completed`, `view.refresh`, `view.dismiss-filter`, `app.help`,
+`app.quit`, `nav.up`, `nav.down`, `nav.left`, `nav.right`, `nav.top`,
+`nav.bottom`, `nav.switch-pane`, `vim.half-down`, `vim.half-up`,
+`vim.page-down`, `vim.page-up`, `vim.palette`, `vim.new`.
+
+### Vim profile
+
+Enable with `--vim`, `REMTUI_KEYS=vim`, or `profile = "vim"` in the config
+(the flag wins) for a few extra vim-style motions:
+
+| Key | Action |
+| --- | --- |
+| `gg` / `G` | jump to top / bottom (single `g` waits for the chord) |
+| `ctrl+d` / `ctrl+u` | half page down / up |
+| `ctrl+f` / `ctrl+b` | full page down / up |
+| `:` | command palette |
+| `o` | add a reminder |
 
 ## Development
 

@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.widget import Widget
-from textual.widgets import ListItem, ProgressBar, Static
+from textual.widgets import ListItem, ListView, ProgressBar, Static
 from textual.widgets.option_list import Option
 
 from remtui.dates import humanize_due, is_due_today, is_overdue
@@ -151,6 +152,53 @@ class ReminderItem(ListItem):
                 style = "dim"
             meta.append(label, style=style)
         return meta
+
+
+class ReminderListView(ListView):
+    """ListView whose paging keys move the selection, not just the viewport.
+
+    Stock ListView binds only up/down/enter for the cursor; PageUp/PageDown/
+    Home/End fall through to the scroll container and scroll the viewport
+    while the highlight stays behind. These overrides keep the selection in
+    step, matching the sidebar OptionList's behavior.
+    """
+
+    BINDINGS = [
+        Binding("pageup", "cursor_page_up", "Page up", show=False),
+        Binding("pagedown", "cursor_page_down", "Page down", show=False),
+        Binding("home", "cursor_home", "First", show=False),
+        Binding("end", "cursor_end", "Last", show=False),
+    ]
+
+    def action_cursor_home(self) -> None:
+        if len(self):
+            self.index = 0
+
+    def action_cursor_end(self) -> None:
+        if len(self):
+            self.index = len(self) - 1
+
+    def action_cursor_page_up(self) -> None:
+        self.cursor_page(-1, 1.0)
+
+    def action_cursor_page_down(self) -> None:
+        self.cursor_page(1, 1.0)
+
+    def cursor_page(self, direction: int, fraction: float) -> None:
+        """Move the selection by (a fraction of) one viewport of items.
+
+        Items have variable height, so advance until their accumulated
+        height fills the requested share of the viewport.
+        """
+        if not len(self):
+            return
+        budget = max(1, int(self.scrollable_content_region.height * fraction))
+        index = self.index or 0
+        children = list(self.children)
+        while 0 <= index + direction < len(children) and budget > 0:
+            index += direction
+            budget -= max(1, children[index].outer_size.height)
+        self.index = index
 
 
 def nav_header(label: str) -> Option:

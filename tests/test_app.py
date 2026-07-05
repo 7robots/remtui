@@ -16,6 +16,11 @@ def app(fake_state) -> RemTuiApp:
     return RemTuiApp(RemctlClient([sys.executable, str(FAKE)]))
 
 
+@pytest.fixture
+def vim_app(fake_state) -> RemTuiApp:
+    return RemTuiApp(RemctlClient([sys.executable, str(FAKE)]), vim=True)
+
+
 async def _settle(pilot, delay: float = 0.6) -> None:
     await pilot.pause(delay)
 
@@ -267,3 +272,88 @@ async def test_pane_switching_keys(app: RemTuiApp):
         assert app.focused is reminders
         await pilot.press("h")
         assert app.focused is nav
+
+
+async def test_tab_toggles_panes_from_start(app: RemTuiApp):
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(pilot, 1.0)
+        assert isinstance(app.focused, OptionList)
+        await pilot.press("tab")
+        assert isinstance(app.focused, ListView)
+        await pilot.press("tab")
+        assert isinstance(app.focused, OptionList)
+
+
+async def test_app_keys_gated_while_modal_open(app: RemTuiApp):
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(pilot, 1.0)
+        _select_list(app, "Home")
+        await _settle(pilot)
+        app.query_one("#reminders", ListView).focus()
+        await pilot.press("d")  # open the delete confirmation
+        await pilot.pause(0.3)
+        assert isinstance(app.screen, ConfirmDeleteScreen)
+        # "a" (add reminder) must not stack a form over the confirm.
+        await pilot.press("a")
+        await pilot.pause(0.3)
+        assert len(app.screen_stack) == 2
+        assert isinstance(app.screen, ConfirmDeleteScreen)
+        await pilot.press("n")  # cancel
+
+
+async def test_vim_profile_gg_and_paging(vim_app: RemTuiApp):
+    async with vim_app.run_test(size=(120, 36)) as pilot:
+        await _settle(pilot, 1.0)
+        _select_list(vim_app, "Personal")
+        await _settle(pilot)
+        list_view = vim_app.query_one("#reminders", ListView)
+        list_view.focus()
+        list_view.index = 2
+        # Single g is a prefix in vim mode: no jump.
+        await pilot.press("g")
+        assert list_view.index == 2
+        # gg jumps to the top.
+        await pilot.press("g")
+        assert list_view.index == 0
+        # ctrl+d moves the selection (half page down).
+        await pilot.press("ctrl+d")
+        assert list_view.index > 0
+
+
+async def test_default_profile_has_no_vim_extras(app: RemTuiApp):
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(pilot, 1.0)
+        _select_list(app, "Personal")
+        await _settle(pilot)
+        list_view = app.query_one("#reminders", ListView)
+        list_view.focus()
+        list_view.index = 2
+        await pilot.press("g")  # jumps immediately, no chord
+        assert list_view.index == 0
+        await pilot.press("ctrl+d")  # vim extra: disabled in default profile
+        assert list_view.index == 0
+        await pilot.press("o")  # vim extra: no add-reminder modal
+        await pilot.pause(0.3)
+        assert app.screen is app.screen_stack[0]
+
+
+async def test_palette_lists_app_commands(app: RemTuiApp):
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(pilot, 1.0)
+        titles = {c.title for c in app.get_system_commands(app.screen)}
+        assert {
+            "Add reminder",
+            "Refresh",
+            "Toggle completed reminders",
+            "Keyboard reference",
+        } <= titles
+
+
+def test_check_action_grays_selection_actions_pre_mount(fake_state):
+    # Unmounted app: no selection, so selection actions are grayed (None),
+    # and the vim extras are disabled (False) in the default profile.
+    app = RemTuiApp(RemctlClient([sys.executable, str(FAKE)]))
+    assert app.check_action("edit_reminder", ()) is None
+    assert app.check_action("toggle_done", ()) is None
+    assert app.check_action("half_page_down", ()) is False
+    assert app.check_action("quit", ()) is True

@@ -7,22 +7,26 @@ import asyncio
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Iterable
 
 from textual import on, work
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.screen import Screen
 from textual.theme import Theme
 from textual.widgets import Footer, Header, Input, ListView, OptionList, Static
 
 from remtui.client import RemctlClient, RemctlError
+from remtui.config import load_keys
 from remtui.models import Reminder, ReminderList
 from remtui.screens import ConfirmDeleteScreen, HelpScreen, ReminderFormScreen
 from remtui.widgets import (
     SMART_VIEWS,
     ReminderItem,
+    ReminderListView,
     ViewHeader,
     list_option,
     logo,
@@ -57,28 +61,64 @@ class RemTuiApp(App[None]):
     CSS_PATH = "remtui.tcss"
 
     BINDINGS = [
-        Binding("a", "add_reminder", "Add"),
-        Binding("e", "edit_reminder", "Edit"),
-        Binding("space", "toggle_done", "Done"),
-        Binding("d,delete,backspace", "delete_reminder", "Delete"),
-        Binding("f", "toggle_flag", "Flag"),
-        Binding("p", "cycle_priority", "Priority", show=False),
-        Binding("slash", "show_filter", "Filter"),
-        Binding("c", "toggle_completed", "Show done", show=False),
-        Binding("r", "refresh", "Refresh", show=False),
-        Binding("escape", "dismiss_filter", show=False),
-        Binding("j", "vim_down", show=False),
-        Binding("k", "vim_up", show=False),
-        Binding("left,h", "focus_nav", "Lists", show=False),
-        Binding("right,l", "focus_reminders", "Reminders", show=False),
-        Binding("tab", "toggle_pane", "Switch pane"),
-        Binding("g", "go_top", show=False),
-        Binding("G", "go_bottom", show=False),
-        Binding("question_mark", "help", "Help"),
-        Binding("q", "quit", "Quit"),
+        Binding("a,n", "add_reminder", "Add", id="reminder.add"),
+        Binding("e", "edit_reminder", "Edit", id="reminder.edit"),
+        Binding("space", "toggle_done", "Done", id="reminder.done"),
+        Binding("d,delete,backspace", "delete_reminder", "Delete", id="reminder.delete"),
+        Binding("f", "toggle_flag", "Flag", id="reminder.flag"),
+        Binding("p", "cycle_priority", "Priority", show=False, id="reminder.priority"),
+        Binding("slash", "show_filter", "Filter", id="view.filter"),
+        Binding("c", "toggle_completed", "Show done", show=False, id="view.show-completed"),
+        Binding("r", "refresh", "Refresh", show=False, id="view.refresh"),
+        Binding("escape", "dismiss_filter", show=False, id="view.dismiss-filter"),
+        Binding("j", "vim_down", show=False, id="nav.down"),
+        Binding("k", "vim_up", show=False, id="nav.up"),
+        Binding("left,h", "focus_nav", "Lists", show=False, id="nav.left"),
+        Binding("right,l", "focus_reminders", "Reminders", show=False, id="nav.right"),
+        # priority so it beats the Screen's built-in tab → focus_next binding
+        Binding(
+            "tab", "toggle_pane", "Switch pane", priority=True, id="nav.switch-pane"
+        ),
+        Binding("g", "go_top", show=False, id="nav.top"),
+        Binding("G", "go_bottom", show=False, id="nav.bottom"),
+        Binding("question_mark", "help", "Help", id="app.help"),
+        Binding("q", "quit", "Quit", id="app.quit"),
+        # vim profile extras — inert unless --vim / REMTUI_KEYS=vim
+        Binding("ctrl+d", "half_page_down", "½ page down", show=False, id="vim.half-down"),
+        Binding("ctrl+u", "half_page_up", "½ page up", show=False, id="vim.half-up"),
+        Binding("ctrl+f", "cursor_page_down", "Page down", show=False, id="vim.page-down"),
+        Binding("ctrl+b", "cursor_page_up", "Page up", show=False, id="vim.page-up"),
+        Binding("colon", "vim_palette", "Palette", show=False, id="vim.palette"),
+        Binding("o", "vim_new", "New", show=False, id="vim.new"),
     ]
 
-    def __init__(self, client: RemctlClient) -> None:
+    # Actions that only exist in the vim key profile.
+    _VIM_ACTIONS = frozenset(
+        {"half_page_down", "half_page_up", "cursor_page_down", "cursor_page_up",
+         "vim_palette", "vim_new"}
+    )
+    # Actions that need a selected reminder (grayed in the footer without one).
+    _SELECTION_ACTIONS = frozenset(
+        {"edit_reminder", "toggle_done", "delete_reminder", "toggle_flag",
+         "cycle_priority"}
+    )
+    # Actions that must not fire while a modal is open (app bindings stay
+    # live under modal screens for any key the modal doesn't consume).
+    _MAIN_SCREEN_ACTIONS = _VIM_ACTIONS | _SELECTION_ACTIONS | frozenset(
+        {"add_reminder", "show_filter", "toggle_completed", "refresh",
+         "toggle_pane", "go_top", "go_bottom", "focus_nav", "focus_reminders",
+         "vim_down", "vim_up"}
+    )
+
+    # Seconds within which a second `g` completes the gg chord (vim profile).
+    _GG_CHORD_SECONDS = 0.75
+
+    def __init__(
+        self,
+        client: RemctlClient,
+        vim: bool = False,
+        key_overrides: dict[str, str] | None = None,
+    ) -> None:
         super().__init__()
         self.client = client
         self.lists: list[ReminderList] = []
@@ -88,6 +128,9 @@ class RemTuiApp(App[None]):
         self.show_completed = False
         self.filter_text = ""
         self._current_option_id = ""
+        self._vim = vim
+        self._key_overrides = key_overrides or {}
+        self._last_g = 0.0  # monotonic time of the last pending `g` press
         # Serializes ListView rebuilds: the "view" and "populate" worker
         # groups are exclusive only within themselves, so without this two
         # concurrent _populate calls interleave clear()/extend() and
@@ -105,13 +148,15 @@ class RemTuiApp(App[None]):
             with Vertical(id="main"):
                 yield ViewHeader(id="view-header")
                 yield Input(placeholder="filter this view…", id="filter")
-                yield ListView(id="reminders")
+                yield ReminderListView(id="reminders")
                 yield Static("", id="empty")
         yield Footer()
 
     def on_mount(self) -> None:
         self.register_theme(REMTUI_THEME)
         self.theme = "remtui"
+        if self._key_overrides:
+            self.set_keymap(dict(self._key_overrides))
         self._fit_logo()
         self._build_nav()
         self.query_one("#nav", OptionList).focus()
@@ -239,6 +284,9 @@ class RemTuiApp(App[None]):
                 list_view.index = index
             self._update_header(len(shown))
             self._update_empty(bool(shown))
+            # Selection may have changed; let the footer re-evaluate its
+            # grayed-out (selection-dependent) states.
+            self.refresh_bindings()
 
     def _update_header(self, shown: int) -> None:
         header = self.query_one("#view-header", ViewHeader)
@@ -282,7 +330,11 @@ class RemTuiApp(App[None]):
     # -- selection helpers ----------------------------------------------------
 
     def _selected_reminder(self) -> Reminder | None:
-        item = self.query_one("#reminders", ListView).highlighted_child
+        try:
+            item = self.query_one("#reminders", ListView).highlighted_child
+        except Exception:
+            # check_action can run before the widget tree is mounted.
+            return None
         if isinstance(item, ReminderItem):
             return item.reminder
         return None
@@ -442,6 +494,32 @@ class RemTuiApp(App[None]):
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
 
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+        yield from super().get_system_commands(screen)
+        yield SystemCommand(
+            "Add reminder", "Create a new reminder", self.action_add_reminder
+        )
+        yield SystemCommand(
+            "Refresh", "Reload lists and the current view", self.action_refresh
+        )
+        yield SystemCommand(
+            "Toggle completed reminders",
+            "Show or hide completed reminders in list views",
+            self.action_toggle_completed,
+        )
+        yield SystemCommand(
+            "Keyboard reference", "Show the key bindings", self.action_help
+        )
+
+    def check_action(self, action: str, parameters) -> bool | None:
+        if action in self._VIM_ACTIONS and not self._vim:
+            return False
+        if action in self._MAIN_SCREEN_ACTIONS and len(self.screen_stack) > 1:
+            return False
+        if action in self._SELECTION_ACTIONS and self._selected_reminder() is None:
+            return None  # disabled, shown grayed in the footer
+        return True
+
     def action_vim_down(self) -> None:
         self._vim_move(1)
 
@@ -469,6 +547,13 @@ class RemTuiApp(App[None]):
             self.action_focus_nav()
 
     def action_go_top(self) -> None:
+        # In the vim profile `g` is a prefix: only the gg chord jumps.
+        if self._vim:
+            now = time.monotonic()
+            if now - self._last_g > self._GG_CHORD_SECONDS:
+                self._last_g = now
+                return
+            self._last_g = 0.0
         focused = self.focused
         if isinstance(focused, ListView) and len(focused) > 0:
             focused.index = 0
@@ -482,8 +567,48 @@ class RemTuiApp(App[None]):
         elif isinstance(focused, OptionList):
             focused.action_last()
 
+    # -- vim profile extras ---------------------------------------------------
 
-def build_client(argv: list[str] | None = None) -> RemctlClient:
+    def action_half_page_down(self) -> None:
+        self._cursor_page(1, 0.5)
+
+    def action_half_page_up(self) -> None:
+        self._cursor_page(-1, 0.5)
+
+    def action_cursor_page_down(self) -> None:
+        self._cursor_page(1, 1.0)
+
+    def action_cursor_page_up(self) -> None:
+        self._cursor_page(-1, 1.0)
+
+    def _cursor_page(self, direction: int, fraction: float) -> None:
+        focused = self.focused
+        if isinstance(focused, ReminderListView):
+            focused.cursor_page(direction, fraction)
+        elif isinstance(focused, OptionList):
+            # The sidebar is short; half and full pages both map to a page
+            # (looping cursor_down would wrap past the ends).
+            if direction > 0:
+                focused.action_page_down()
+            else:
+                focused.action_page_up()
+
+    def action_vim_palette(self) -> None:
+        self.action_command_palette()
+
+    def action_vim_new(self) -> None:
+        self.action_add_reminder()
+
+
+def build_client(
+    argv: list[str] | None = None,
+) -> tuple[RemctlClient, bool, dict[str, str]]:
+    """Parse CLI args; return the client, vim-profile flag, and key overrides.
+
+    The vim profile is enabled by `--vim`, `REMTUI_KEYS=vim`, or
+    `profile = "vim"` in the config file (in that precedence order).
+    Per-binding key overrides come from the config's [keys] section.
+    """
     parser = argparse.ArgumentParser(
         prog="remtui",
         description="A Textual TUI for Apple Reminders, powered by remctl.",
@@ -498,11 +623,24 @@ def build_client(argv: list[str] | None = None) -> RemctlClient:
         metavar="PATH",
         help="path to the remctl binary (default: $REMTUI_REMCTL or 'remctl' on PATH)",
     )
+    parser.add_argument(
+        "--vim",
+        action="store_true",
+        help="enable the vim key profile (gg/G, ctrl+d/u/f/b, :, o); "
+        "also enabled via REMTUI_KEYS=vim or the config file",
+    )
     args = parser.parse_args(argv)
+
+    profile, overrides = load_keys()
+    vim = (
+        args.vim
+        or os.environ.get("REMTUI_KEYS", "").lower() == "vim"
+        or profile == "vim"
+    )
 
     if args.demo:
         fake = Path(__file__).parent / "fake_remctl.py"
-        return RemctlClient([sys.executable, str(fake)])
+        return RemctlClient([sys.executable, str(fake)]), vim, overrides
 
     binary = args.remctl or os.environ.get("REMTUI_REMCTL", "remctl")
     if shutil.which(binary) is None:
@@ -511,11 +649,12 @@ def build_client(argv: list[str] | None = None) -> RemctlClient:
             "Install remctl (https://github.com/viticci/remctl) and run "
             "'remctl onboard', or try 'remtui --demo'."
         )
-    return RemctlClient(binary)
+    return RemctlClient(binary), vim, overrides
 
 
 def main() -> None:
-    RemTuiApp(build_client()).run()
+    client, vim, overrides = build_client()
+    RemTuiApp(client, vim=vim, key_overrides=overrides).run()
 
 
 if __name__ == "__main__":

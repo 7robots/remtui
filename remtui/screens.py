@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
+
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -38,6 +42,7 @@ class ReminderFormScreen(ModalScreen[bool]):
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+s", "save", "Save"),
+        Binding("ctrl+e", "open_in_editor", "Open notes in $EDITOR"),
     ]
 
     def __init__(
@@ -135,6 +140,24 @@ class ReminderFormScreen(ModalScreen[bool]):
         if self._saving:
             return
         self.run_worker(self._save(), group="save")
+
+    def action_open_in_editor(self) -> None:
+        """Edit the notes field in an external editor ($EDITOR, default vim)."""
+        text_area = self.query_one("#f-notes", TextArea)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            f.write(text_area.text)
+            temp_path = f.name
+        try:
+            editor = os.environ.get("EDITOR", "vim")
+            with self.app.suspend():
+                subprocess.run([editor, temp_path], check=True)
+            with open(temp_path) as f:
+                edited = f.read()
+            text_area.clear()
+            text_area.insert(edited)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
 
     @on(Button.Pressed, "#b-cancel")
     def _cancel_pressed(self) -> None:
@@ -283,10 +306,22 @@ HELP_TEXT = """\
   c                   show/hide completed (list views)
   r                   refresh
 
+[bold $accent]Form (add / edit)[/]
+  ctrl+s              save
+  ctrl+e              edit notes in $EDITOR
+  esc                 cancel
+
 [bold $accent]App[/]
   ctrl+p              command palette (themes & more)
   ?                   this help
   q                   quit
+
+[bold $accent]Vim profile[/]  [dim](--vim, REMTUI_KEYS=vim, or config)[/]
+  gg / G              jump to top / bottom
+  ctrl+d / ctrl+u     half page down / up
+  ctrl+f / ctrl+b     full page down / up
+  :                   command palette
+  o                   add a reminder
 """
 
 
