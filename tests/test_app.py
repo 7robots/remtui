@@ -7,6 +7,7 @@ from textual.widgets import Button, Checkbox, Input, ListView, OptionList
 
 from remtui.app import RemTuiApp
 from remtui.client import RemctlClient
+from remtui.panel import RemindersPanel
 from remtui.screens import ConfirmDeleteScreen, HelpScreen, ReminderFormScreen
 from tests.conftest import FAKE
 
@@ -183,6 +184,9 @@ async def test_filter_narrows_and_escape_clears(app: RemTuiApp):
         await _settle(pilot)
         assert app.panel.filter_text == ""
         assert len(list_view.children) > 1
+        # Dismissing the filter used to end the app's message loop when the
+        # populate worker was cancelled mid-rebuild.
+        assert app.is_running
 
 
 async def test_help_screen_opens_and_closes(app: RemTuiApp):
@@ -350,13 +354,15 @@ async def test_palette_lists_app_commands(app: RemTuiApp):
 
 
 def test_check_action_grays_selection_actions_pre_mount(fake_state):
-    # Unmounted app: no selection, so selection actions are grayed (None),
-    # and the vim extras are disabled (False) in the default profile.
-    app = RemTuiApp(RemctlClient([sys.executable, str(FAKE)]))
-    assert app.panel.check_action("edit_reminder", ()) is None
-    assert app.panel.check_action("toggle_done", ()) is None
-    assert app.panel.check_action("half_page_down", ()) is False
-    assert app.panel.check_action("quit", ()) is True
+    # Unmounted panel: no selection, so selection actions are grayed (None),
+    # and the vim extras are disabled (False) in the default profile. Built
+    # directly rather than through an app, since there is no screen to reach
+    # the panel through before mounting.
+    panel = RemindersPanel(RemctlClient([sys.executable, str(FAKE)]))
+    assert panel.check_action("edit_reminder", ()) is None
+    assert panel.check_action("toggle_done", ()) is None
+    assert panel.check_action("half_page_down", ()) is False
+    assert panel.check_action("quit", ()) is True
 
 
 async def test_edit_form_flag_checkbox_saves_with_other_fields(app: RemTuiApp):

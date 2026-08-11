@@ -562,7 +562,13 @@ ReminderItem.-done {
     def _filter_submitted(self) -> None:
         self.query_one("#reminders", ListView).focus()
 
-    @work(exclusive=True, group="populate")
+    # Deliberately not exclusive. Cancelling a populate worker part-way
+    # through rebuilding the ListView ends the app's message loop -- silently,
+    # with no exception and no exit() call -- which showed up as escape after
+    # filtering killing the app once this worker belonged to the panel rather
+    # than to the App. _populate_lock already serializes rebuilds, so
+    # cancellation bought nothing: the queued runs just settle in order.
+    @work(group="populate")
     async def repopulate(self) -> None:
         await self._populate()
 
