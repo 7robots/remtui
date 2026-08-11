@@ -176,7 +176,11 @@ ReminderItem.-done {
         Binding("g", "go_top", show=False, id="nav.top"),
         Binding("G", "go_bottom", show=False, id="nav.bottom"),
         Binding("question_mark", "help", "Help", id="app.help"),
-        Binding("q", "quit", "Quit", id="app.quit"),
+        # `app.quit`, not `quit`: a widget binding's action resolves against
+        # the widget, and the panel has no action_quit, so a bare `quit` here
+        # silently does nothing. Namespacing it targets the app that hosts the
+        # panel -- which a host can override with a priority binding of its own.
+        Binding("q", "app.quit", "Quit", id="app.quit"),
         # vim profile extras — inert unless --vim / REMTUI_KEYS=vim
         Binding("ctrl+d", "half_page_down", "½ page down", show=False, id="vim.half-down"),
         Binding("ctrl+u", "half_page_up", "½ page up", show=False, id="vim.half-up"),

@@ -448,3 +448,16 @@ async def test_add_form_surfaces_flag_failure_warning(app: RemTuiApp, monkeypatc
             "flag_not_set" in message and severity == "warning"
             for message, severity in notifications
         ), f"expected a flag warning, got {notifications}"
+
+
+async def test_q_quits_the_standalone_app(app: RemTuiApp):
+    """A widget binding's action resolves against the widget, so the panel's
+    `q` has to name the app explicitly or quit silently does nothing."""
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(pilot, 1.0)
+        app.query_one("#reminders", ListView).focus()
+
+        await pilot.press("q")
+        await pilot.pause()
+
+        assert not app.is_running
