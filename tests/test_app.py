@@ -27,16 +27,16 @@ async def _settle(pilot, delay: float = 0.6) -> None:
 
 def _select_list(app: RemTuiApp, title: str) -> None:
     nav = app.query_one("#nav", OptionList)
-    lst = next(lst for lst in app.lists if lst.title == title)
+    lst = next(lst for lst in app.panel.lists if lst.title == title)
     nav.highlighted = nav.get_option_index(f"list:{lst.id}")
 
 
 async def test_startup_shows_today_and_lists(app: RemTuiApp):
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(pilot, 1.0)
-        assert app.view_kind == "today"
-        assert len(app.lists) == 5
-        assert app.reminders, "today view should have seeded reminders"
+        assert app.panel.view_kind == "today"
+        assert len(app.panel.lists) == 5
+        assert app.panel.reminders, "today view should have seeded reminders"
         nav = app.query_one("#nav", OptionList)
         # 2 headers + 1 spacer + 4 smart views + 5 lists
         assert nav.option_count == 12
@@ -47,9 +47,9 @@ async def test_switch_to_list_view(app: RemTuiApp):
         await _settle(pilot, 1.0)
         _select_list(app, "Groceries")
         await _settle(pilot)
-        assert app.view_kind == "list"
-        assert app.view_list.title == "Groceries"
-        titles = [r.title for r in app.reminders]
+        assert app.panel.view_kind == "list"
+        assert app.panel.view_list.title == "Groceries"
+        titles = [r.title for r in app.panel.reminders]
         assert "Milk" in titles
         assert "Coffee beans" not in titles  # completed, hidden by default
 
@@ -61,7 +61,7 @@ async def test_toggle_completed_visibility(app: RemTuiApp):
         await _settle(pilot)
         await pilot.press("c")
         await _settle(pilot)
-        titles = [r.title for r in app.reminders]
+        titles = [r.title for r in app.panel.reminders]
         assert "Coffee beans" in titles
 
 
@@ -70,11 +70,11 @@ async def test_toggle_done_removes_from_active_view(app: RemTuiApp):
         await _settle(pilot, 1.0)
         _select_list(app, "Groceries")
         await _settle(pilot)
-        before = len(app.reminders)
+        before = len(app.panel.reminders)
         app.query_one("#reminders", ListView).focus()
         await pilot.press("space")
         await _settle(pilot, 1.0)
-        assert len(app.reminders) == before - 1
+        assert len(app.panel.reminders) == before - 1
 
 
 async def test_add_reminder_via_form(app: RemTuiApp):
@@ -90,7 +90,7 @@ async def test_add_reminder_via_form(app: RemTuiApp):
         await pilot.press("enter")  # submit from the title input
         await _settle(pilot, 1.2)
         assert not isinstance(app.screen, ReminderFormScreen)
-        assert any(r.title == "Clean the gutters" for r in app.reminders)
+        assert any(r.title == "Clean the gutters" for r in app.panel.reminders)
 
 
 async def test_add_requires_title(app: RemTuiApp):
@@ -120,7 +120,7 @@ async def test_edit_reminder_via_form(app: RemTuiApp):
         title_input.value = original + " — edited"
         await pilot.press("enter")
         await _settle(pilot, 1.2)
-        assert any(r.title == original + " — edited" for r in app.reminders)
+        assert any(r.title == original + " — edited" for r in app.panel.reminders)
 
 
 async def test_delete_with_confirmation(app: RemTuiApp):
@@ -128,7 +128,7 @@ async def test_delete_with_confirmation(app: RemTuiApp):
         await _settle(pilot, 1.0)
         _select_list(app, "Home")
         await _settle(pilot)
-        before = {r.id for r in app.reminders}
+        before = {r.id for r in app.panel.reminders}
         app.query_one("#reminders", ListView).focus()
         await pilot.press("d")
         await pilot.pause(0.3)
@@ -137,7 +137,7 @@ async def test_delete_with_confirmation(app: RemTuiApp):
         await pilot.press("y")
         await _settle(pilot, 1.2)
         assert doomed in before
-        assert doomed not in {r.id for r in app.reminders}
+        assert doomed not in {r.id for r in app.panel.reminders}
 
 
 async def test_delete_cancel_keeps_reminder(app: RemTuiApp):
@@ -145,13 +145,13 @@ async def test_delete_cancel_keeps_reminder(app: RemTuiApp):
         await _settle(pilot, 1.0)
         _select_list(app, "Home")
         await _settle(pilot)
-        before = {r.id for r in app.reminders}
+        before = {r.id for r in app.panel.reminders}
         app.query_one("#reminders", ListView).focus()
         await pilot.press("d")
         await pilot.pause(0.3)
         await pilot.press("n")
         await _settle(pilot)
-        assert {r.id for r in app.reminders} == before
+        assert {r.id for r in app.panel.reminders} == before
 
 
 async def test_flag_toggle(app: RemTuiApp):
@@ -160,11 +160,11 @@ async def test_flag_toggle(app: RemTuiApp):
         _select_list(app, "Home")
         await _settle(pilot)
         app.query_one("#reminders", ListView).focus()
-        target = app._selected_reminder()
+        target = app.panel._selected_reminder()
         assert not target.flagged
         await pilot.press("f")
         await _settle(pilot, 1.2)
-        flagged_now = next(r for r in app.reminders if r.id == target.id)
+        flagged_now = next(r for r in app.panel.reminders if r.id == target.id)
         assert flagged_now.flagged
 
 
@@ -181,7 +181,7 @@ async def test_filter_narrows_and_escape_clears(app: RemTuiApp):
         assert len(list_view.children) == 1
         await pilot.press("escape")
         await _settle(pilot)
-        assert app.filter_text == ""
+        assert app.panel.filter_text == ""
         assert len(list_view.children) > 1
 
 
@@ -202,11 +202,11 @@ async def test_smart_view_navigation_via_keyboard(app: RemTuiApp):
         app.query_one("#nav", OptionList).focus()
         await pilot.press("j")  # Upcoming
         await _settle(pilot)
-        assert app.view_kind == "upcoming"
+        assert app.panel.view_kind == "upcoming"
         await pilot.press("j")  # Overdue
         await _settle(pilot)
-        assert app.view_kind == "overdue"
-        assert any("passport" in r.title.lower() for r in app.reminders)
+        assert app.panel.view_kind == "overdue"
+        assert any("passport" in r.title.lower() for r in app.panel.reminders)
 
 
 async def test_double_enter_in_form_creates_one_reminder(app: RemTuiApp):
@@ -214,16 +214,16 @@ async def test_double_enter_in_form_creates_one_reminder(app: RemTuiApp):
         await _settle(pilot, 1.0)
         _select_list(app, "Home")
         await _settle(pilot)
-        before = len(app.reminders)
+        before = len(app.panel.reminders)
         await pilot.press("a")
         await pilot.pause(0.3)
         app.screen.query_one("#f-title", Input).value = "Only once"
         await pilot.press("enter")
         await pilot.press("enter")  # double-submit must be a no-op
         await _settle(pilot, 1.5)
-        matches = [r for r in app.reminders if r.title == "Only once"]
+        matches = [r for r in app.panel.reminders if r.title == "Only once"]
         assert len(matches) == 1
-        assert len(app.reminders) == before + 1
+        assert len(app.panel.reminders) == before + 1
 
 
 async def test_filter_box_hidden_after_view_switch(app: RemTuiApp):
@@ -239,7 +239,7 @@ async def test_filter_box_hidden_after_view_switch(app: RemTuiApp):
         await _settle(pilot)
         filter_input = app.query_one("#filter", Input)
         assert not filter_input.has_class("-visible")
-        assert app.filter_text == ""
+        assert app.panel.filter_text == ""
 
 
 async def test_header_counts_fresh_after_mutation(app: RemTuiApp):
@@ -247,11 +247,11 @@ async def test_header_counts_fresh_after_mutation(app: RemTuiApp):
         await _settle(pilot, 1.0)
         _select_list(app, "Groceries")
         await _settle(pilot)
-        active_before = app.view_list.active
+        active_before = app.panel.view_list.active
         app.query_one("#reminders", ListView).focus()
         await pilot.press("space")  # complete one
         await _settle(pilot, 1.5)
-        assert app.view_list.active == active_before - 1
+        assert app.panel.view_list.active == active_before - 1
 
 
 async def test_pane_switching_keys(app: RemTuiApp):
@@ -353,10 +353,10 @@ def test_check_action_grays_selection_actions_pre_mount(fake_state):
     # Unmounted app: no selection, so selection actions are grayed (None),
     # and the vim extras are disabled (False) in the default profile.
     app = RemTuiApp(RemctlClient([sys.executable, str(FAKE)]))
-    assert app.check_action("edit_reminder", ()) is None
-    assert app.check_action("toggle_done", ()) is None
-    assert app.check_action("half_page_down", ()) is False
-    assert app.check_action("quit", ()) is True
+    assert app.panel.check_action("edit_reminder", ()) is None
+    assert app.panel.check_action("toggle_done", ()) is None
+    assert app.panel.check_action("half_page_down", ()) is False
+    assert app.panel.check_action("quit", ()) is True
 
 
 async def test_edit_form_flag_checkbox_saves_with_other_fields(app: RemTuiApp):
@@ -371,7 +371,7 @@ async def test_edit_form_flag_checkbox_saves_with_other_fields(app: RemTuiApp):
         _select_list(app, "Home")
         await _settle(pilot)
         app.query_one("#reminders", ListView).focus()
-        target = app._selected_reminder()
+        target = app.panel._selected_reminder()
         assert not target.flagged
 
         await pilot.press("e")
@@ -383,7 +383,7 @@ async def test_edit_form_flag_checkbox_saves_with_other_fields(app: RemTuiApp):
         await _settle(pilot, 1.5)
 
         assert not isinstance(app.screen, ReminderFormScreen), "save should dismiss"
-        saved = next(r for r in app.reminders if r.id == target.id)
+        saved = next(r for r in app.panel.reminders if r.id == target.id)
         assert saved.title == "Renamed and flagged"
         assert saved.flagged
 
@@ -396,11 +396,11 @@ async def test_edit_form_can_unflag(app: RemTuiApp):
         list_view = app.query_one("#reminders", ListView)
         list_view.focus()
         flagged_index = next(
-            i for i, r in enumerate(app.reminders) if r.flagged
+            i for i, r in enumerate(app.panel.reminders) if r.flagged
         )
         list_view.index = flagged_index
         await pilot.pause(0.2)
-        target = app._selected_reminder()
+        target = app.panel._selected_reminder()
         assert target.flagged
 
         await pilot.press("e")
@@ -409,7 +409,7 @@ async def test_edit_form_can_unflag(app: RemTuiApp):
         app.screen.query_one("#b-save", Button).press()
         await _settle(pilot, 1.5)
 
-        assert not next(r for r in app.reminders if r.id == target.id).flagged
+        assert not next(r for r in app.panel.reminders if r.id == target.id).flagged
 
 
 async def test_add_form_surfaces_flag_failure_warning(app: RemTuiApp, monkeypatch):
@@ -436,7 +436,7 @@ async def test_add_form_surfaces_flag_failure_warning(app: RemTuiApp, monkeypatc
         app.screen.query_one("#b-save", Button).press()
         await _settle(pilot, 1.5)
 
-        added = next(r for r in app.reminders if r.title == "Wanted a flag")
+        added = next(r for r in app.panel.reminders if r.title == "Wanted a flag")
         assert not added.flagged  # the flag write failed
         assert any(
             "flag_not_set" in message and severity == "warning"

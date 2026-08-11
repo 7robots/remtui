@@ -1,0 +1,108 @@
+/* ── modal dialogs ──────────────────────────────────────────────────── */
+
+ReminderFormScreen,
+ConfirmDeleteScreen,
+HelpScreen {
+    align: center middle;
+}
+
+#dialog {
+    width: 62;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    background: $surface;
+    padding: 0 2 1 2;
+}
+
+.form-dialog {
+    border: round $primary;
+    border-title-color: $primary;
+    border-title-style: bold;
+}
+
+.form-dialog Input,
+.form-dialog Select,
+.form-dialog TextArea {
+    border-title-color: $text-muted;
+}
+
+.confirm-dialog {
+    width: 58;
+    border: round $error;
+}
+
+.help-dialog {
+    width: 60;
+    border: round $accent;
+}
+
+#confirm-title, #help-title {
+    text-style: bold;
+    color: $text;
+    padding-bottom: 1;
+}
+
+.confirm-dialog, .help-dialog {
+    padding-top: 1;
+}
+
+.form-row {
+    height: auto;
+}
+
+.form-row > * {
+    width: 1fr;
+}
+
+.form-row > *:first-child {
+    margin-right: 2;
+}
+
+#f-notes {
+    height: 4;
+    border: tall $border-blurred;
+}
+
+#f-notes:focus {
+    border: tall $border;
+}
+
+#f-flag {
+    background: transparent;
+    border: none;
+    margin-top: 1;
+}
+
+#form-error {
+    display: none;
+    color: $text-error;
+    margin-top: 1;
+}
+
+#form-error.-visible {
+    display: block;
+}
+
+.form-buttons {
+    height: auto;
+    align-horizontal: right;
+}
+
+.form-buttons Button {
+    margin-left: 2;
+    min-width: 12;
+}
+
+#confirm-message {
+    color: $text-muted;
+}
+
+#help-body {
+    height: auto;
+}
+
+#help-footer {
+    margin-top: 1;
+    text-align: center;
+}
