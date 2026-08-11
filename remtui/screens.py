@@ -13,7 +13,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Select, Static, TextArea
 
-from remtui.client import RemctlClient, RemctlError
+from remtui.client import RemctlClient, RemctlError, warnings_of
 from remtui.models import Reminder, ReminderList
 
 PRIORITY_OPTIONS = [
@@ -195,9 +195,11 @@ class ReminderFormScreen(ModalScreen[bool]):
         self._saving = True
         try:
             if self.is_edit:
-                await self._save_edit(title, notes, due, str(priority), list_title, flagged)
+                result = await self._save_edit(
+                    title, notes, due, str(priority), list_title, flagged
+                )
             else:
-                await self.client.add(
+                result = await self.client.add(
                     title,
                     list_title=list_title,
                     notes=notes,
@@ -210,6 +212,11 @@ class ReminderFormScreen(ModalScreen[bool]):
             save_button.disabled = False
             self._saving = False
             return
+        # The write succeeded but remctl reported a partial failure (e.g. the
+        # reminder was created and only the flag write failed). Notify on the
+        # app, not this screen: it is about to be dismissed.
+        for warning in warnings_of(result):
+            self.app.notify(warning, title="remctl", severity="warning", timeout=8)
         self.dismiss(True)
 
     async def _save_edit(
@@ -220,7 +227,7 @@ class ReminderFormScreen(ModalScreen[bool]):
         priority: str,
         list_title: str,
         flagged: bool,
-    ) -> None:
+    ) -> object:
         """Send only the fields that changed."""
         r = self.reminder
         assert r is not None
@@ -237,8 +244,9 @@ class ReminderFormScreen(ModalScreen[bool]):
             kwargs["list_title"] = list_title
         if flagged != r.flagged:
             kwargs["flagged"] = flagged
-        if kwargs:
-            await self.client.edit(r.id, **kwargs)
+        if not kwargs:
+            return None
+        return await self.client.edit(r.id, **kwargs)
 
 
 class ConfirmDeleteScreen(ModalScreen[bool]):

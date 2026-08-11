@@ -3,7 +3,7 @@
 import sys
 
 import pytest
-from textual.widgets import Input, ListView, OptionList
+from textual.widgets import Button, Checkbox, Input, ListView, OptionList
 
 from remtui.app import RemTuiApp
 from remtui.client import RemctlClient
@@ -357,3 +357,88 @@ def test_check_action_grays_selection_actions_pre_mount(fake_state):
     assert app.check_action("toggle_done", ()) is None
     assert app.check_action("half_page_down", ()) is False
     assert app.check_action("quit", ()) is True
+
+
+async def test_edit_form_flag_checkbox_saves_with_other_fields(app: RemTuiApp):
+    """The Flagged checkbox must not break the save.
+
+    remctl rejects `edit --flagged` without --private, so routing the flag
+    through the edit command used to fail the whole dialog and silently drop
+    the title/priority changes alongside it.
+    """
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(pilot, 1.0)
+        _select_list(app, "Home")
+        await _settle(pilot)
+        app.query_one("#reminders", ListView).focus()
+        target = app._selected_reminder()
+        assert not target.flagged
+
+        await pilot.press("e")
+        await pilot.pause(0.3)
+        assert isinstance(app.screen, ReminderFormScreen)
+        app.screen.query_one("#f-title", Input).value = "Renamed and flagged"
+        app.screen.query_one("#f-flag", Checkbox).value = True
+        app.screen.query_one("#b-save", Button).press()
+        await _settle(pilot, 1.5)
+
+        assert not isinstance(app.screen, ReminderFormScreen), "save should dismiss"
+        saved = next(r for r in app.reminders if r.id == target.id)
+        assert saved.title == "Renamed and flagged"
+        assert saved.flagged
+
+
+async def test_edit_form_can_unflag(app: RemTuiApp):
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(pilot, 1.0)
+        _select_list(app, "Personal")
+        await _settle(pilot)
+        list_view = app.query_one("#reminders", ListView)
+        list_view.focus()
+        flagged_index = next(
+            i for i, r in enumerate(app.reminders) if r.flagged
+        )
+        list_view.index = flagged_index
+        await pilot.pause(0.2)
+        target = app._selected_reminder()
+        assert target.flagged
+
+        await pilot.press("e")
+        await pilot.pause(0.3)
+        app.screen.query_one("#f-flag", Checkbox).value = False
+        app.screen.query_one("#b-save", Button).press()
+        await _settle(pilot, 1.5)
+
+        assert not next(r for r in app.reminders if r.id == target.id).flagged
+
+
+async def test_add_form_surfaces_flag_failure_warning(app: RemTuiApp, monkeypatch):
+    """A created-but-unflagged reminder must not look like a clean success."""
+    monkeypatch.setenv("REMTUI_FAKE_FLAG_FAILS", "1")
+    notifications: list[tuple[str, str | None]] = []
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(pilot, 1.0)
+        _select_list(app, "Home")
+        await _settle(pilot)
+        original_notify = app.notify
+        monkeypatch.setattr(
+            app,
+            "notify",
+            lambda message, **kw: (
+                notifications.append((message, kw.get("severity"))),
+                original_notify(message, **kw),
+            )[1],
+        )
+        await pilot.press("a")
+        await pilot.pause(0.3)
+        app.screen.query_one("#f-title", Input).value = "Wanted a flag"
+        app.screen.query_one("#f-flag", Checkbox).value = True
+        app.screen.query_one("#b-save", Button).press()
+        await _settle(pilot, 1.5)
+
+        added = next(r for r in app.reminders if r.title == "Wanted a flag")
+        assert not added.flagged  # the flag write failed
+        assert any(
+            "flag_not_set" in message and severity == "warning"
+            for message, severity in notifications
+        ), f"expected a flag warning, got {notifications}"

@@ -2,7 +2,7 @@
 
 import pytest
 
-from remtui.client import RemctlClient, RemctlError
+from remtui.client import RemctlClient, RemctlError, warnings_of
 
 
 async def test_get_lists(client: RemctlClient):
@@ -145,3 +145,123 @@ async def test_url_field_roundtrip(client: RemctlClient):
     reminders = await client.get_reminders("Home")
     added = next(r for r in reminders if r.id == result["numericId"])
     assert added.url == "https://example.com/x"
+
+
+# -- flag routing ------------------------------------------------------------
+# remctl rejects `edit --flagged` without --private, so edit() must never emit
+# it; flag changes go through the flag/unflag commands instead.
+
+
+async def test_edit_flagged_uses_flag_command(client: RemctlClient):
+    new_id = (await client.add("Flag me", list_title="Home"))["numericId"]
+
+    result = await client.edit(new_id, flagged=True)
+    assert result["status"] == "flagged"
+    edited = next(r for r in await client.get_reminders("Home") if r.id == new_id)
+    assert edited.flagged
+
+    assert (await client.edit(new_id, flagged=False))["status"] == "unflagged"
+    assert not next(
+        r for r in await client.get_reminders("Home") if r.id == new_id
+    ).flagged
+
+
+async def test_edit_applies_fields_and_flag_together(client: RemctlClient):
+    new_id = (await client.add("Both", list_title="Home", priority="low"))["numericId"]
+    # The field edit's payload wins, so callers still see status "updated".
+    result = await client.edit(new_id, title="Both changed", priority="high", flagged=True)
+    assert result["status"] == "updated"
+    edited = next(r for r in await client.get_reminders("Home") if r.id == new_id)
+    assert edited.title == "Both changed"
+    assert edited.priority == "high"
+    assert edited.flagged
+
+
+async def test_edit_flag_follows_new_id_after_clone_delete_move(
+    client: RemctlClient, monkeypatch
+):
+    """A pure list move can clone-delete and return a new id; flag that one.
+
+    The fake keeps ids stable across moves, so the reassignment real remctl
+    does on its clone-delete fallback is stubbed in here.
+    """
+    flagged_ids = []
+
+    async def fake_mutate(*args):
+        return {"status": "updated", "id": 777, "oldId": 1, "method": "clone-delete"}
+
+    async def fake_flag(reminder_id):
+        flagged_ids.append(reminder_id)
+        return {"status": "flagged", "id": reminder_id}
+
+    monkeypatch.setattr(client, "_mutate", fake_mutate)
+    monkeypatch.setattr(client, "flag", fake_flag)
+    await client.edit(1, list_title="Work", flagged=True)
+    assert flagged_ids == [777]
+
+
+async def test_edit_flag_uses_original_id_without_a_field_edit(
+    client: RemctlClient, monkeypatch
+):
+    flagged_ids = []
+
+    async def fake_flag(reminder_id):
+        flagged_ids.append(reminder_id)
+        return {"status": "flagged", "id": reminder_id}
+
+    monkeypatch.setattr(client, "flag", fake_flag)
+    await client.edit(42, flagged=True)
+    assert flagged_ids == [42]
+
+
+async def test_edit_with_no_changes_is_a_noop(client: RemctlClient):
+    new_id = (await client.add("Untouched", list_title="Home"))["numericId"]
+    assert await client.edit(new_id) is None
+
+
+# -- partial failures --------------------------------------------------------
+
+
+@pytest.fixture
+def failing_flags(monkeypatch):
+    """Simulate a Mac without the Automation permission remctl's flag needs."""
+    monkeypatch.setenv("REMTUI_FAKE_FLAG_FAILS", "1")
+
+
+async def test_add_reports_flag_failure_as_warning(client: RemctlClient, failing_flags):
+    result = await client.add("Created but unflagged", list_title="Home", flagged=True)
+    # The reminder still exists: a failed flag write is not a failed add.
+    assert result["status"] == "created"
+    added = next(
+        r for r in await client.get_reminders("Home") if r.id == result["numericId"]
+    )
+    assert not added.flagged
+    assert any(w.startswith("flag_not_set:") for w in warnings_of(result))
+
+
+async def test_flag_failure_raises_instead_of_faking_success(
+    client: RemctlClient, failing_flags
+):
+    new_id = (await client.add("Cannot flag", list_title="Home"))["numericId"]
+    with pytest.raises(RemctlError) as excinfo:
+        await client.flag(new_id)
+    assert excinfo.value.code == "applescript_flag_failed"
+
+
+async def test_edit_keeps_field_changes_when_flag_write_fails(
+    client: RemctlClient, failing_flags
+):
+    new_id = (await client.add("Partial edit", list_title="Home"))["numericId"]
+    with pytest.raises(RemctlError):
+        await client.edit(new_id, title="Renamed anyway", flagged=True)
+    # The field edit ran first, so it survives the flag failure.
+    edited = next(r for r in await client.get_reminders("Home") if r.id == new_id)
+    assert edited.title == "Renamed anyway"
+    assert not edited.flagged
+
+
+def test_warnings_of_tolerates_odd_payloads():
+    assert warnings_of(None) == []
+    assert warnings_of({"status": "created"}) == []
+    assert warnings_of({"warnings": "single"}) == ["single"]
+    assert warnings_of({"warnings": ["a", "", None, "b"]}) == ["a", "b"]

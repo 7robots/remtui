@@ -34,6 +34,24 @@ class RemctlError(Exception):
         self.exit_code = exit_code
 
 
+def warnings_of(result: Any) -> list[str]:
+    """Extract partial-failure warnings from a mutation payload.
+
+    remctl reports a write that mostly succeeded with exit 0 plus a
+    `warnings` array rather than an error: `add --flag` creates the reminder
+    and reports `["flag_not_set: ..."]` when only the separate AppleScript
+    flag write failed. Callers must surface these or the failure is invisible.
+    """
+    if not isinstance(result, dict):
+        return []
+    raw = result.get("warnings")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw if item]
+
+
 def _parse_stderr(stderr: str) -> tuple[str, str]:
     """Extract (message, code) from remctl stderr — structured JSON if
     present, otherwise the first non-empty plain-text line."""
@@ -188,6 +206,15 @@ class RemctlClient:
         list_title: Any = UNSET,
         flagged: Any = UNSET,
     ) -> Any:
+        """Apply the changed fields, leaving UNSET ones alone.
+
+        `flagged` is written with a separate flag/unflag call, not an
+        `edit --flagged` argument: remctl classes the flag as private
+        metadata and rejects `edit --flagged` without `--private`, which
+        would fail the whole update and lose the other field changes. The
+        field edit runs first so a pure list move can report the new id its
+        clone-delete fallback assigns; the flag is written against that id.
+        """
         args = ["edit", str(reminder_id)]
         if title is not UNSET:
             args.append(f"--title={title}")
@@ -199,11 +226,15 @@ class RemctlClient:
             args.append(f"--priority={priority or 'none'}")
         if list_title is not UNSET:
             args.append(f"--list={list_title}")
-        if flagged is not UNSET:
-            args.append("--flagged" if flagged else "--no-flagged")
-        if len(args) == 2:
-            return None
-        return await self._mutate(*args)
+        result = await self._mutate(*args) if len(args) > 2 else None
+        if flagged is UNSET:
+            return result
+        target = reminder_id
+        if isinstance(result, dict) and result.get("id") is not None:
+            with contextlib.suppress(TypeError, ValueError):
+                target = int(result["id"])
+        flag_result = await (self.flag(target) if flagged else self.unflag(target))
+        return result if result is not None else flag_result
 
     async def done(self, reminder_id: int) -> Any:
         return await self._mutate("done", str(reminder_id))

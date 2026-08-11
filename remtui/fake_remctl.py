@@ -257,6 +257,31 @@ def fail_not_found(reminder_id: int) -> None:
     sys.exit(1)
 
 
+def flag_writes_fail() -> bool:
+    """Whether to simulate a failing flag write ($REMTUI_FAKE_FLAG_FAILS=1).
+
+    Flagging is AppleScript-only in real remctl, so it fails on a Mac without
+    Automation permission. That failure has two shapes worth exercising:
+    flag/unflag exit 1 with code applescript_flag_failed, while add --flag
+    still creates the reminder and reports warnings with exit 0.
+    """
+    return os.environ.get("REMTUI_FAKE_FLAG_FAILS") == "1"
+
+
+FLAG_ERROR = "osascript: Automation permission denied (-1743)"
+
+
+def fail_flag_write(reminder_id: int) -> None:
+    payload = {
+        "status": "error",
+        "code": "applescript_flag_failed",
+        "id": reminder_id,
+        "message": f"Could not set the flag: {FLAG_ERROR}",
+    }
+    print(json.dumps(payload), file=sys.stderr)
+    sys.exit(1)
+
+
 def fail_invalid_due(value: str) -> None:
     payload = {
         "status": "error",
@@ -449,7 +474,8 @@ def main(argv: list[str] | None = None) -> None:
             "title": args.title,
             "list": lst["title"],
             "completed": False,
-            "flagged": bool(args.flag),
+            # A failed flag write does not undo the creation.
+            "flagged": bool(args.flag) and not flag_writes_fail(),
             "urgent": False,
             "priority": priority,
             "notes": args.notes,
@@ -464,15 +490,30 @@ def main(argv: list[str] | None = None) -> None:
         state["next_id"] += 1
         reminders.append(row)
         save_state(state)
-        emit_status({
+        created = {
             "status": "created",
             "id": f"FAKE-CK-{row['id']}",
             "title": row["title"],
             "numericId": row["id"],
-        })
+        }
+        if args.flag and flag_writes_fail():
+            created["warnings"] = [f"flag_not_set: {FLAG_ERROR}"]
+        emit_status(created)
 
     elif args.command == "edit":
         row = find_reminder(state, args.id)
+        if args.flagged is not None:
+            # Mirror real remctl: the flag is private metadata, so `edit
+            # --flagged` is rejected before anything is written and callers
+            # must use the flag/unflag commands instead. Accepting it here
+            # would hide the failure from demo mode and the test suite.
+            print(
+                "Error: synced tag replacement/removal, grocery, section, "
+                "assignment, subtask, image, urgent, early-reminder, flagged, "
+                "and location writes require --private.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         if args.title is not None:
             row["title"] = args.title
         if args.notes is not None:
@@ -482,8 +523,6 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"Error: invalid priority '{args.priority}'", file=sys.stderr)
                 sys.exit(1)
             row["priority"] = args.priority.lower()
-        if args.flagged is not None:
-            row["flagged"] = args.flagged
         if args.list_name is not None:
             lst = find_list(state, args.list_name)
             if lst is None:
@@ -509,6 +548,8 @@ def main(argv: list[str] | None = None) -> None:
 
     elif args.command in ("flag", "unflag"):
         row = find_reminder(state, args.id)
+        if flag_writes_fail():
+            fail_flag_write(args.id)
         row["flagged"] = args.command == "flag"
         save_state(state)
         emit_status({
