@@ -33,11 +33,12 @@ everywhere too.
 remtui
 ```
 
-The install script syncs the project environment with uv and drops a
-`remtui` launcher into the same directory as your `remctl` binary
-(e.g. `~/bin`), falling back to `~/.local/bin` if remctl isn't found.
-Use `--dir DIR` to pick a location explicitly, `--uninstall` to remove it,
-and re-run `./install.sh` after a `git pull` to update.
+The install script syncs the project environment with uv and drops a `remtui`
+launcher into `~/bin`. Use `--dir DIR` to pick a location explicitly,
+`--uninstall` to remove it, and re-run `./install.sh` after a `git pull` to
+update. The same script with the same defaults ships in
+[librarian](https://github.com/7robots/librarian) and
+[TaskPaperTUI](https://github.com/7robots/TaskPaperTUI).
 
 You can also skip installation and run from the checkout:
 
