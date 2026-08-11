@@ -130,10 +130,32 @@ faithful emulation of remctl's JSON contract backed by a JSON state file
 - `remtui/client.py` — async subprocess wrapper around `remctl … --json`;
   reads run concurrently, mutations are serialized (EventKit writes race).
 - `remtui/models.py` — dataclasses mirroring remctl's JSON schemas.
-- `remtui/app.py` — the Textual app: sidebar (smart views + lists), reminder
-  pane, workers for loading and mutations.
-- `remtui/screens.py` — modal add/edit form, delete confirmation, help.
+- `remtui/panel.py` — `RemindersPanel`, the whole UI as one widget: sidebar
+  (smart views + lists), reminder pane, workers for loading and mutations. Its
+  styles are scoped `DEFAULT_CSS`, so mounting it somewhere else cannot restyle
+  the host.
+- `remtui/screen.py` — `RemindersScreen`, a thin frame: header, panel, footer.
+- `remtui/app.py` — the app shell: theme, keymap, command palette, and the
+  default screen. Deliberately small.
+- `remtui/screens.py` — modal add/edit form, delete confirmation, help. Each
+  carries `dialogs.tcss` so the dialogs travel with the panel.
 - `remtui/widgets.py` — reminder rows, sidebar options, view header.
+
+### Embedding the panel
+
+`RemindersPanel` is a plain widget, so another Textual app can mount it:
+
+```python
+from remtui.client import RemctlClient
+from remtui.panel import RemindersPanel
+
+yield RemindersPanel(RemctlClient())
+```
+
+It brings its own styles, bindings, and workers, and pushes its own dialogs. It
+does not touch the host's theme — remtui's own theme is applied by `RemTuiApp`,
+not by the panel. This is how [librarian](https://github.com/7robots/librarian)
+shows reminders without launching remtui as a separate process.
 
 ## Acknowledgements
 

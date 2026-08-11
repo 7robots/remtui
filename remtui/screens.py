@@ -39,6 +39,10 @@ def _prefill_due(reminder: Reminder) -> str:
 class ReminderFormScreen(ModalScreen[bool]):
     """Add or edit a reminder. Dismisses with True after a successful save."""
 
+    # The dialog styles travel with the dialogs, so the panel keeps its look
+    # when another app hosts it.
+    CSS_PATH = "dialogs.tcss"
+
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+s", "save", "Save"),
@@ -252,6 +256,10 @@ class ReminderFormScreen(ModalScreen[bool]):
 class ConfirmDeleteScreen(ModalScreen[bool]):
     """Are-you-sure dialog for deletion."""
 
+    # The dialog styles travel with the dialogs, so the panel keeps its look
+    # when another app hosts it.
+    CSS_PATH = "dialogs.tcss"
+
     BINDINGS = [
         Binding("escape,n", "cancel", "Cancel"),
         Binding("y", "confirm", "Delete"),
@@ -334,6 +342,10 @@ HELP_TEXT = """\
 
 
 class HelpScreen(ModalScreen[None]):
+    # The dialog styles travel with the dialogs, so the panel keeps its look
+    # when another app hosts it.
+    CSS_PATH = "dialogs.tcss"
+
     BINDINGS = [Binding("escape,q,question_mark", "close", "Close")]
 
     def compose(self) -> ComposeResult:
