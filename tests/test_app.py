@@ -655,3 +655,17 @@ async def test_delete_confirm_focuses_the_safe_option(app: RemTuiApp):
         assert buttons == [("btn-cancel", "Cancel"), ("btn-delete", "Delete")]
         assert app.focused.id == "btn-cancel"
         assert modal.query("Footer")
+
+
+async def test_button_row_and_footer_do_not_overlap(app: RemTuiApp):
+    """A docked footer would compete with the button row for the same rows."""
+    async with app.run_test(size=(110, 34)) as pilot:
+        modal = await _open_form(app, pilot)
+
+        row = modal.query_one(".form-buttons").region
+        footer = modal.query_one("Footer").region
+
+        assert row.height >= 3, "buttons should not be squashed"
+        assert row.y + row.height <= footer.y, (
+            f"button row {row} overlaps footer {footer}"
+        )

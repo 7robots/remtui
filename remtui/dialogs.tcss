@@ -91,9 +91,11 @@ HelpScreen {
 
 /* Inside the dialog, not at the bottom of the terminal: the hints belong to
    this dialog, and it is not full-screen. Derived from BINDINGS, so they
-   cannot drift from the keys that actually work. */
+   cannot drift from the keys that actually work.
+
+   Not docked -- the dialog is auto-height, and a docked footer would compete
+   with the button row for the same rows and clip it. */
 #dialog Footer {
-    dock: bottom;
     height: 1;
     background: $panel;
 }
