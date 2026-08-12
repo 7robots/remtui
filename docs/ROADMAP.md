@@ -45,6 +45,18 @@ Options, cheapest first:
 Whichever we pick, make `fake_remctl.py` match remctl and only emit `counts`
 for group children — the current divergence is what hid this.
 
+## Cross-cutting work
+
+Three items span all four projects (librarian, remtui, projection, taskpapertui) and are tracked in
+**librarian's** `docs/ROADMAP.md` rather than duplicated here:
+
+- **Performance review** — establish a baseline before optimizing; nothing is known to be slow yet.
+- **A Rust/ratatui prototype**, strictly conditional on that review. Note the constraint: this
+  project's panel is embedded *in-process* by librarian, so rewriting it in Rust would drop it to the
+  suspend-and-launch handoff.
+- **Security and code review** — subprocess construction, untrusted text from other people's
+  calendars/reminders reaching filenames and rendered output, path handling, and token safety.
+
 ## Deferred
 
 ### Recurrence editing
