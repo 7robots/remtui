@@ -385,7 +385,7 @@ async def test_edit_form_flag_checkbox_saves_with_other_fields(app: RemTuiApp):
         assert isinstance(app.screen, ReminderFormScreen)
         app.screen.query_one("#f-title", Input).value = "Renamed and flagged"
         app.screen.query_one("#f-flag", Checkbox).value = True
-        app.screen.query_one("#b-save", Button).press()
+        app.screen.query_one("#btn-save", Button).press()
         await _settle(pilot, 1.5)
 
         assert not isinstance(app.screen, ReminderFormScreen), "save should dismiss"
@@ -412,7 +412,7 @@ async def test_edit_form_can_unflag(app: RemTuiApp):
         await pilot.press("e")
         await pilot.pause(0.3)
         app.screen.query_one("#f-flag", Checkbox).value = False
-        app.screen.query_one("#b-save", Button).press()
+        app.screen.query_one("#btn-save", Button).press()
         await _settle(pilot, 1.5)
 
         assert not next(r for r in app.panel.reminders if r.id == target.id).flagged
@@ -439,7 +439,7 @@ async def test_add_form_surfaces_flag_failure_warning(app: RemTuiApp, monkeypatc
         await pilot.pause(0.3)
         app.screen.query_one("#f-title", Input).value = "Wanted a flag"
         app.screen.query_one("#f-flag", Checkbox).value = True
-        app.screen.query_one("#b-save", Button).press()
+        app.screen.query_one("#btn-save", Button).press()
         await _settle(pilot, 1.5)
 
         added = next(r for r in app.panel.reminders if r.title == "Wanted a flag")
@@ -514,3 +514,144 @@ async def test_dropping_the_logo_survives_a_resize(fake_state):
         await _settle(pilot, 0.5)
 
         assert host.is_running
+
+
+# ── dialog contract: shared with projection ───────────────────────────────
+#
+# Both apps' dialogs follow one shape, so moving between them (or meeting one
+# embedded in librarian) does not mean relearning the buttons:
+#
+#   [secondary…] [Cancel] [Primary]     right-aligned, primary last
+#   ^e Editor  esc Cancel  ^s Save      Footer, derived from BINDINGS
+#
+# with focus starting in the first field, and the safe option focused in a
+# destructive confirm.
+
+
+async def _open_form(app: RemTuiApp, pilot) -> ReminderFormScreen:
+    await _settle(pilot, 1.0)
+    await pilot.press("a")
+    await pilot.pause(0.4)
+    assert isinstance(app.screen, ReminderFormScreen)
+    return app.screen
+
+
+async def test_form_button_order_and_ids(app: RemTuiApp):
+    async with app.run_test(size=(110, 34)) as pilot:
+        modal = await _open_form(app, pilot)
+
+        buttons = [(b.id, str(b.label)) for b in modal.query("Button")]
+        assert buttons == [
+            ("btn-editor", "Editor"),
+            ("btn-cancel", "Cancel"),
+            ("btn-save", "Add"),
+        ]
+
+
+async def test_form_buttons_are_right_aligned(app: RemTuiApp):
+    async with app.run_test(size=(110, 34)) as pilot:
+        modal = await _open_form(app, pilot)
+
+        row = modal.query_one(".form-buttons")
+        assert row.styles.align_horizontal == "right"
+
+
+async def test_form_labels_carry_no_shortcut_text(app: RemTuiApp):
+    """The Footer owns the hints, so labels cannot drift from the bindings."""
+    async with app.run_test(size=(110, 34)) as pilot:
+        modal = await _open_form(app, pilot)
+
+        for button in modal.query("Button"):
+            label = str(button.label)
+            assert "^" not in label and "Ctrl" not in label and "(" not in label
+
+
+async def test_form_has_a_footer_listing_its_shortcuts(app: RemTuiApp):
+    async with app.run_test(size=(110, 34)) as pilot:
+        modal = await _open_form(app, pilot)
+
+        assert modal.query("Footer"), "the dialog should carry its own Footer"
+
+        shown = {
+            key: ab.binding.description
+            for key, ab in modal.active_bindings.items()
+            if ab.binding.show
+        }
+        assert shown["ctrl+s"] == "Save"
+        assert shown["ctrl+e"] == "Editor"
+        assert shown["escape"] == "Cancel"
+
+
+async def test_form_starts_in_the_first_field(app: RemTuiApp):
+    async with app.run_test(size=(110, 34)) as pilot:
+        await _open_form(app, pilot)
+
+        assert app.focused is not None
+        assert app.focused.id == "f-title"
+
+
+async def test_shortcuts_reach_the_form_from_inside_a_field(app: RemTuiApp):
+    """The bug priority=True fixes.
+
+    An Input binds ctrl+e and friends itself, and a focused widget is checked
+    before the screen -- so the dialog's shortcuts used to die the moment the
+    cursor was in a field, which is where the dialog puts it.
+    """
+    async with app.run_test(size=(110, 34)) as pilot:
+        modal = await _open_form(app, pilot)
+        assert isinstance(app.focused, Input)
+
+        for key in ("ctrl+s", "ctrl+e", "escape"):
+            binding = modal.active_bindings.get(key)
+            assert binding is not None, f"{key} unreachable"
+            assert binding.node is modal, f"{key} is being eaten by {binding.node!r}"
+
+
+async def test_ctrl_e_fires_with_the_cursor_in_a_field(
+    app: RemTuiApp, monkeypatch
+):
+    """Functional half of the above: the key actually dispatches."""
+    async with app.run_test(size=(110, 34)) as pilot:
+        modal = await _open_form(app, pilot)
+
+        fired = []
+        monkeypatch.setattr(
+            type(modal), "action_open_in_editor", lambda self: fired.append(1)
+        )
+        await pilot.press("ctrl+e")
+        await pilot.pause(0.3)
+
+        assert fired, "ctrl+e did not reach the dialog"
+
+
+async def test_tab_walks_fields_then_buttons_ending_on_the_primary(app: RemTuiApp):
+    async with app.run_test(size=(110, 34)) as pilot:
+        await _open_form(app, pilot)
+
+        seen = []
+        for _ in range(20):
+            await pilot.press("tab")
+            await pilot.pause()
+            if app.focused is not None:
+                seen.append(app.focused.id)
+            if seen[-1:] == ["btn-save"]:
+                break
+
+        buttons = [i for i in seen if i and i.startswith("btn-")]
+        assert buttons == ["btn-editor", "btn-cancel", "btn-save"], seen
+
+
+async def test_delete_confirm_focuses_the_safe_option(app: RemTuiApp):
+    async with app.run_test(size=(110, 34)) as pilot:
+        await _settle(pilot, 1.0)
+        app.query_one("#reminders", ListView).focus()
+        await _settle(pilot)
+        await pilot.press("d")
+        await pilot.pause(0.4)
+
+        modal = app.screen
+        assert isinstance(modal, ConfirmDeleteScreen)
+        buttons = [(b.id, str(b.label)) for b in modal.query("Button")]
+        assert buttons == [("btn-cancel", "Cancel"), ("btn-delete", "Delete")]
+        assert app.focused.id == "btn-cancel"
+        assert modal.query("Footer")

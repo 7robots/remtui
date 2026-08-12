@@ -89,6 +89,15 @@ HelpScreen {
     align-horizontal: right;
 }
 
+/* Inside the dialog, not at the bottom of the terminal: the hints belong to
+   this dialog, and it is not full-screen. Derived from BINDINGS, so they
+   cannot drift from the keys that actually work. */
+#dialog Footer {
+    dock: bottom;
+    height: 1;
+    background: $panel;
+}
+
 .form-buttons Button {
     margin-left: 2;
     min-width: 12;

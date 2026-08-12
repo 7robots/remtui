@@ -11,7 +11,15 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Input, Select, Static, TextArea
+from textual.widgets import (
+    Button,
+    Checkbox,
+    Footer,
+    Input,
+    Select,
+    Static,
+    TextArea,
+)
 
 from remtui.client import RemctlClient, RemctlError, warnings_of
 from remtui.models import Reminder, ReminderList
@@ -43,10 +51,15 @@ class ReminderFormScreen(ModalScreen[bool]):
     # when another app hosts it.
     CSS_PATH = "dialogs.tcss"
 
+    # priority=True on all three: an Input or TextArea with focus binds several
+    # of these itself (ctrl+e, ctrl+k...), and a focused widget is checked
+    # before the screen -- so without priority the dialog's own shortcuts stop
+    # working the moment the cursor is in a field, which is the whole time. It
+    # also keeps the Footer honest, since it lists the reachable bindings.
     BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("ctrl+s", "save", "Save"),
-        Binding("ctrl+e", "open_in_editor", "Open notes in $EDITOR"),
+        Binding("escape", "cancel", "Cancel", priority=True),
+        Binding("ctrl+s", "save", "Save", priority=True),
+        Binding("ctrl+e", "open_in_editor", "Editor", priority=True),
     ]
 
     def __init__(
@@ -119,13 +132,19 @@ class ReminderFormScreen(ModalScreen[bool]):
                 )
                 yield Checkbox("Flagged ⚑", value=r.flagged if r else False, id="f-flag")
             yield Static("", id="form-error")
+            # Secondary actions first, then Cancel, then the primary -- the
+            # shape every dialog in both apps uses. Shortcuts are not repeated
+            # in the labels; the Footer below derives them from BINDINGS, so
+            # they cannot drift.
             with Horizontal(classes="form-buttons"):
-                yield Button("Cancel", id="b-cancel")
+                yield Button("Editor", id="btn-editor")
+                yield Button("Cancel", id="btn-cancel")
                 yield Button(
                     "Save" if self.is_edit else "Add",
                     variant="primary",
-                    id="b-save",
+                    id="btn-save",
                 )
+            yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#f-title", Input).focus()
@@ -163,11 +182,15 @@ class ReminderFormScreen(ModalScreen[bool]):
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
 
-    @on(Button.Pressed, "#b-cancel")
+    @on(Button.Pressed, "#btn-editor")
+    def _editor_pressed(self) -> None:
+        self.action_open_in_editor()
+
+    @on(Button.Pressed, "#btn-cancel")
     def _cancel_pressed(self) -> None:
         self.dismiss(False)
 
-    @on(Button.Pressed, "#b-save")
+    @on(Button.Pressed, "#btn-save")
     def _save_pressed(self) -> None:
         self.action_save()
 
@@ -194,7 +217,7 @@ class ReminderFormScreen(ModalScreen[bool]):
             self.query_one("#f-title", Input).focus()
             return
 
-        save_button = self.query_one("#b-save", Button)
+        save_button = self.query_one("#btn-save", Button)
         save_button.disabled = True
         self._saving = True
         try:
@@ -278,13 +301,14 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
                 id="confirm-message",
             )
             with Horizontal(classes="form-buttons"):
-                yield Button("Cancel  (n)", id="b-cancel")
-                yield Button("Delete  (y)", variant="error", id="b-delete")
+                yield Button("Cancel", id="btn-cancel")
+                yield Button("Delete", variant="error", id="btn-delete")
+            yield Footer()
 
     def on_mount(self) -> None:
         # Focus the safe option: a stray Enter right after pressing "d"
         # must not delete irreversibly.
-        self.query_one("#b-cancel", Button).focus()
+        self.query_one("#btn-cancel", Button).focus()
 
     def action_cancel(self) -> None:
         self.dismiss(False)
@@ -292,11 +316,11 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
     def action_confirm(self) -> None:
         self.dismiss(True)
 
-    @on(Button.Pressed, "#b-cancel")
+    @on(Button.Pressed, "#btn-cancel")
     def _cancel_pressed(self) -> None:
         self.dismiss(False)
 
-    @on(Button.Pressed, "#b-delete")
+    @on(Button.Pressed, "#btn-delete")
     def _delete_pressed(self) -> None:
         self.dismiss(True)
 
