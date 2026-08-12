@@ -3,11 +3,16 @@
 # project's uv-managed venv, so `git pull && ./install.sh` is also the update
 # path.
 #
-# The same script, with the same defaults, ships in librarian, remtui, and
-# taskpapertui: one install command to learn, one place the binaries land.
+# The same script, with the same defaults, ships in librarian, remtui,
+# projection, and taskpapertui: one install command to learn, one place the
+# binaries land. Only the APP/EXTRAS lines below differ between them.
 set -euo pipefail
 
 APP="remtui"
+# Optional-dependency extra to install alongside the app, or "" for none. The
+# rest of this script is identical across the four projects; per-project
+# differences belong here.
+EXTRAS=""
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_DIR="$HOME/bin"
 
@@ -51,7 +56,11 @@ fi
 command -v uv >/dev/null 2>&1 || die "uv is required — install it from https://docs.astral.sh/uv/"
 
 echo "Syncing project environment in $PROJECT_DIR …"
-(cd "$PROJECT_DIR" && uv sync --quiet)
+# --inexact: a plain `uv sync` is exact and removes anything not in the
+# lockfile, which silently deleted optional panels installed by hand (see
+# EXTRAS above). Keeping extraneous packages costs nothing here -- the venv is
+# this project's alone.
+(cd "$PROJECT_DIR" && uv sync --quiet --inexact ${EXTRAS:+--extra "$EXTRAS"})
 
 VENV_BIN="$PROJECT_DIR/.venv/bin/$APP"
 [ -x "$VENV_BIN" ] || die "expected $VENV_BIN after uv sync — is pyproject.toml intact?"
