@@ -215,9 +215,15 @@ ReminderItem.-done {
         self,
         client: RemctlClient,
         vim: bool = False,
+        *,
+        show_logo: bool = True,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
+        # The wordmark identifies the app when it *is* the app. Embedded in
+        # another TUI the host already says what this is, so three rows of
+        # sidebar are better spent on the lists.
+        self._show_logo = show_logo
         self.client = client
         self.lists: list[ReminderList] = []
         self.reminders: list[Reminder] = []
@@ -239,7 +245,8 @@ ReminderItem.-done {
     def compose(self) -> ComposeResult:
         with Horizontal(id="body"):
             with Vertical(id="sidebar"):
-                yield Static(logo(), id="logo")
+                if self._show_logo:
+                    yield Static(logo(), id="logo")
                 yield OptionList(id="nav")
             with Vertical(id="main"):
                 yield ViewHeader(id="view-header")
@@ -258,6 +265,8 @@ ReminderItem.-done {
 
     def _fit_logo(self) -> None:
         # On short terminals the sidebar space belongs to the lists.
+        if not self._show_logo:
+            return  # not composed at all
         self.query_one("#logo", Static).display = self.size.height >= 20
 
     # -- sidebar ------------------------------------------------------------

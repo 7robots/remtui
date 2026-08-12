@@ -461,3 +461,56 @@ async def test_q_quits_the_standalone_app(app: RemTuiApp):
         await pilot.pause()
 
         assert not app.is_running
+
+
+# ── the logo is optional, for embedding ───────────────────────────────────
+
+
+async def test_logo_shows_by_default(app: RemTuiApp):
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _settle(pilot, 1.0)
+        assert app.panel.query("#logo")
+
+
+async def test_logo_can_be_dropped_for_a_host(fake_state):
+    """Embedded in another TUI, the host's own chrome already names the app,
+    so three rows of sidebar are better spent on the lists."""
+    from textual.app import App, ComposeResult
+
+    class Host(App):
+        def compose(self) -> ComposeResult:
+            yield RemindersPanel(
+                RemctlClient([sys.executable, str(FAKE)]),
+                show_logo=False,
+                id="p",
+            )
+
+    host = Host()
+    async with host.run_test(size=(120, 40)) as pilot:
+        await _settle(pilot, 1.0)
+        panel = host.query_one("#p", RemindersPanel)
+
+        assert not panel.query("#logo")
+        assert panel.query_one("#nav")  # the nav got the rows back
+
+
+async def test_dropping_the_logo_survives_a_resize(fake_state):
+    """_fit_logo runs on every resize and used to query a widget that exists."""
+    from textual.app import App, ComposeResult
+
+    class Host(App):
+        def compose(self) -> ComposeResult:
+            yield RemindersPanel(
+                RemctlClient([sys.executable, str(FAKE)]),
+                show_logo=False,
+                id="p",
+            )
+
+    host = Host()
+    async with host.run_test(size=(120, 40)) as pilot:
+        await _settle(pilot, 1.0)
+        # A short terminal is what makes _fit_logo want to hide the logo.
+        await pilot.resize_terminal(100, 12)
+        await _settle(pilot, 0.5)
+
+        assert host.is_running
