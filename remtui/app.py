@@ -13,7 +13,7 @@ from textual.app import App, SystemCommand
 from textual.screen import Screen
 from textual.theme import Theme
 
-from remtui.client import RemctlClient
+from remtui.client import RemctlClient, resolve_remctl
 from remtui.config import load_keys
 from remtui.panel import RemindersPanel
 from remtui.screen import RemindersScreen
@@ -133,7 +133,7 @@ def build_client(
         fake = Path(__file__).parent / "fake_remctl.py"
         return RemctlClient([sys.executable, str(fake)]), vim, overrides
 
-    binary = args.remctl or os.environ.get("REMTUI_REMCTL", "remctl")
+    binary = args.remctl or resolve_remctl()
     if shutil.which(binary) is None:
         sys.exit(
             f"remtui: '{binary}' not found on PATH.\n"

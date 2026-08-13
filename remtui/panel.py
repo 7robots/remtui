@@ -12,7 +12,8 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Input, ListView, OptionList, Static
 
-from remtui.client import RemctlClient, RemctlError
+from remtui.client import RemctlClient, RemctlError, resolve_remctl
+from remtui.config import load_keys
 from remtui.models import Reminder, ReminderList
 from remtui.screens import ConfirmDeleteScreen, HelpScreen, ReminderFormScreen
 from remtui.widgets import (
@@ -213,18 +214,40 @@ ReminderItem.-done {
 
     def __init__(
         self,
-        client: RemctlClient,
-        vim: bool = False,
+        client: RemctlClient | None = None,
+        vim: bool | None = None,
         *,
         show_logo: bool = True,
         **kwargs,
     ) -> None:
+        """Both arguments default to *remtui's own* answer, not to a fixed value.
+
+        A host embedding this panel should pass neither. remtui's app fills them
+        from the command line and the config file; nothing else knows how, and a
+        host that guesses gets it wrong quietly:
+
+        - `client=None` builds one on the binary `resolve_remctl()` names, so
+          `$REMTUI_REMCTL` is honoured. librarian passed `RemctlClient()`, whose
+          default is the literal "remctl" — so a custom binary worked standalone
+          and was ignored in the embed.
+        - `vim=None` reads the key profile from remtui's config, so
+          `[keys] profile = "vim"` applies wherever the panel is mounted rather
+          than only when remtui is the application.
+
+        Per-binding `[keys]` overrides are deliberately *not* applied here. They
+        are an App-level keymap, and remtui's binding ids (`nav.down`,
+        `view.refresh`) are not unique to remtui — applying them inside a host
+        would rebind the host's own keys. A guest does not rebind its host.
+        """
         super().__init__(**kwargs)
         # The wordmark identifies the app when it *is* the app. Embedded in
         # another TUI the host already says what this is, so three rows of
         # sidebar are better spent on the lists.
         self._show_logo = show_logo
-        self.client = client
+        self.client = client if client is not None else RemctlClient(resolve_remctl())
+        if vim is None:
+            profile, _ = load_keys()
+            vim = profile == "vim"
         self.lists: list[ReminderList] = []
         self.reminders: list[Reminder] = []
         self.view_kind: str = "today"

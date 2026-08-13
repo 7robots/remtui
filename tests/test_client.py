@@ -265,3 +265,44 @@ def test_warnings_of_tolerates_odd_payloads():
     assert warnings_of({"status": "created"}) == []
     assert warnings_of({"warnings": "single"}) == ["single"]
     assert warnings_of({"warnings": ["a", "", None, "b"]}) == ["a", "b"]
+
+
+# ==================== Resolving the binary, in one place =====================
+#
+# A host embedding `RemindersPanel` needs the same answer remtui's own app needs.
+# librarian re-derived it and got it wrong: `RemctlClient()` takes the literal
+# "remctl", so anyone who set $REMTUI_REMCTL had it ignored inside the embed
+# while remtui standalone honoured it.
+
+
+def test_the_env_var_names_the_binary(monkeypatch):
+    monkeypatch.setenv("REMTUI_REMCTL", "/opt/custom/remctl")
+    from remtui.client import resolve_remctl
+
+    assert resolve_remctl() == "/opt/custom/remctl"
+
+
+def test_without_the_env_var_it_is_remctl_on_path(monkeypatch):
+    monkeypatch.delenv("REMTUI_REMCTL", raising=False)
+    from remtui.client import resolve_remctl
+
+    assert resolve_remctl() == "remctl"
+
+
+def test_an_empty_env_var_is_not_a_binary_name(monkeypatch):
+    """An exported-but-empty variable means "unset", not a command of ""."""
+    monkeypatch.setenv("REMTUI_REMCTL", "   ")
+    from remtui.client import resolve_remctl
+
+    assert resolve_remctl() == "remctl"
+
+
+def test_found_reports_on_the_resolved_binary(monkeypatch):
+    """So a host can choose a handoff *before* mounting a panel that cannot work."""
+    from remtui.client import remctl_found
+
+    monkeypatch.setenv("REMTUI_REMCTL", "/definitely/not/here/remctl")
+    assert remctl_found() is False
+
+    monkeypatch.setenv("REMTUI_REMCTL", "sh")  # something certain to exist
+    assert remctl_found() is True

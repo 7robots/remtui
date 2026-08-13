@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import json
 import os
+import shutil
 from typing import Any, Sequence
 
 from remtui.models import Reminder, ReminderList, parse_lists, parse_reminders
@@ -69,6 +70,34 @@ def _parse_stderr(stderr: str) -> tuple[str, str]:
         if line.strip():
             return line.strip(), ""
     return "remctl failed with no error output", ""
+
+
+# Where the remctl binary comes from when nobody says otherwise. `--remctl` wins
+# over this; see `app.build_client`.
+ENV_COMMAND = "REMTUI_REMCTL"
+DEFAULT_COMMAND = "remctl"
+
+
+def resolve_remctl() -> str:
+    """The remctl binary to run: `$REMTUI_REMCTL`, else `remctl` on PATH.
+
+    The one place that answers this. It exists because *hosts* need the answer
+    too: a Textual app embedding `RemindersPanel` has no business re-deriving it,
+    and librarian did — it built `RemctlClient()` with the hardcoded default, so
+    anyone who set `$REMTUI_REMCTL` had it silently ignored inside the embed while
+    remtui standalone honoured it.
+    """
+    return os.environ.get(ENV_COMMAND, "").strip() or DEFAULT_COMMAND
+
+
+def remctl_found() -> bool:
+    """Whether the resolved binary is actually there.
+
+    For a host deciding *before* it mounts the panel: without this it can only
+    find out when the first call fails, by which point a suspend-and-launch
+    fallback is no longer on the table.
+    """
+    return shutil.which(resolve_remctl()) is not None
 
 
 class RemctlClient:

@@ -143,19 +143,40 @@ faithful emulation of remctl's JSON contract backed by a JSON state file
 
 ### Embedding the panel
 
-`RemindersPanel` is a plain widget, so another Textual app can mount it:
+`RemindersPanel` is a plain widget, so another Textual app can mount it — and it
+should be handed **nothing**:
 
 ```python
-from remtui.client import RemctlClient
 from remtui.panel import RemindersPanel
 
-yield RemindersPanel(RemctlClient())
+yield RemindersPanel()
 ```
 
-It brings its own styles, bindings, and workers, and pushes its own dialogs. It
-does not touch the host's theme — remtui's own theme is applied by `RemTuiApp`,
-not by the panel. This is how [librarian](https://github.com/7robots/librarian)
-shows reminders without launching remtui as a separate process.
+It resolves what it needs from remtui's own settings: the `remctl` binary from
+`$REMTUI_REMCTL` (else `remctl` on `PATH`), and the key profile from
+`~/.config/remtui/config.toml`. An earlier version of this example passed
+`RemctlClient()`, and hosts copied it — which silently ignored both, because
+`RemctlClient()`'s own default is the literal `"remctl"`. Pass a client only if
+you genuinely have one to impose, as remtui's app does for `--demo`.
+
+Before mounting, a host can ask whether the binary is even there, and fall back
+to launching remtui as a process instead of showing a panel that cannot work:
+
+```python
+from remtui.client import remctl_found
+
+if remctl_found():
+    ...mount the panel...
+```
+
+The panel brings its own styles, bindings, and workers, and pushes its own
+dialogs. It does not touch the host's theme — remtui's own theme is applied by
+`RemTuiApp`, not by the panel — and it does not touch the host's keymap either:
+per-binding `[keys]` overrides are applied by the app, because remtui's binding
+ids (`nav.down`, `view.refresh`) are not unique to remtui and rebinding them
+inside a host would move the host's own keys. This is how
+[librarian](https://github.com/7robots/librarian) shows reminders without
+launching remtui as a separate process.
 
 ## Acknowledgements
 

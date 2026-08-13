@@ -669,3 +669,50 @@ async def test_button_row_and_footer_do_not_overlap(app: RemTuiApp):
         assert row.y + row.height <= footer.y, (
             f"button row {row} overlaps footer {footer}"
         )
+
+
+# ==================== What the panel resolves for itself =====================
+#
+# A host that embeds `RemindersPanel` should pass neither a client nor a key
+# profile: remtui's app fills those from the command line and the config file,
+# and nothing else knows how. librarian passed a client it built itself, which
+# is how `$REMTUI_REMCTL` came to be ignored inside the embed.
+
+
+def test_a_panel_given_no_client_uses_the_resolved_binary(monkeypatch):
+    from remtui.panel import RemindersPanel
+
+    monkeypatch.setenv("REMTUI_REMCTL", "/opt/custom/remctl")
+    panel = RemindersPanel()
+    assert panel.client.command == ("/opt/custom/remctl",)
+
+
+def test_a_handed_in_client_still_wins(monkeypatch):
+    """remtui's own app builds one (including --demo's fake), and must keep it."""
+    from remtui.client import RemctlClient
+    from remtui.panel import RemindersPanel
+
+    monkeypatch.setenv("REMTUI_REMCTL", "/opt/custom/remctl")
+    client = RemctlClient(["python", "fake.py"])
+    assert RemindersPanel(client).client is client
+
+
+def test_the_key_profile_comes_from_the_config_when_unset(monkeypatch, tmp_path):
+    """So `[keys] profile = "vim"` applies in an embed, not only standalone."""
+    from remtui import config as config_module
+    from remtui.panel import RemindersPanel
+
+    config_dir = tmp_path / "remtui"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text('[keys]\nprofile = "vim"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(config_module, "CONFIG_DIR", config_dir, raising=False)
+
+    assert RemindersPanel()._vim is True
+    # An explicit answer still wins, which is what remtui's app passes.
+    assert RemindersPanel(vim=False)._vim is False
+
+
+def test_the_profile_defaults_to_plain_keys(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    assert RemindersPanel()._vim is False
