@@ -87,3 +87,21 @@ pub fn status(result: &Option<serde_json::Value>) -> String {
         .unwrap_or("")
         .to_string()
 }
+
+use remtui::config::Config;
+use remtui::harness::Harness;
+
+pub const SIZE: (u16, u16) = (120, 36);
+
+impl Fake {
+    /// A started harness on the fake remctl, default profile, 120×36.
+    pub fn harness(&self) -> Harness {
+        self.harness_with(Config::default(), false, SIZE)
+    }
+
+    pub fn harness_with(&self, config: Config, vim: bool, size: (u16, u16)) -> Harness {
+        let mut h = Harness::new(config, self.shared_client(), vim, size);
+        h.start();
+        h
+    }
+}

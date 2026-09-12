@@ -1,0 +1,533 @@
+//! Drawing: the header, sidebar, view header, reminder list, footer, toasts
+//! and overlays, all from `App` state. The draw pass records where panes
+//! landed for mouse hit testing and clamps scrolling to the viewport.
+
+pub mod field;
+pub mod help;
+pub mod rows;
+pub mod theme;
+
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use unicode_width::UnicodeWidthStr;
+
+use crate::app::{App, NavItem, Overlay, Pane, Rects, Severity};
+use crate::keys::{Action, BINDINGS};
+use crate::models::SmartView;
+use field::Field;
+
+pub const SIDEBAR_WIDTH: u16 = 30;
+/// The logo shows only when the terminal is at least this tall.
+pub const LOGO_MIN_HEIGHT: u16 = 20;
+
+pub fn draw(frame: &mut Frame, app: &mut App) {
+    let area = frame.area();
+    let [header, body, footer] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(3),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+    let mut rects = Rects::default();
+
+    draw_header(frame, header);
+    let [sidebar, main] =
+        Layout::horizontal([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(20)]).areas(body);
+    draw_sidebar(frame, app, sidebar, &mut rects);
+    draw_main(frame, app, main, &mut rects);
+    draw_footer(frame, app, footer);
+    app.rects = rects;
+
+    draw_toasts(frame, app, body);
+    if let Some(overlay) = app.overlay.clone() {
+        draw_overlay(frame, app, area, &overlay);
+    }
+}
+
+fn draw_header(frame: &mut Frame, area: Rect) {
+    let clock = chrono::Local::now().format("%H:%M:%S").to_string();
+    let title = " remtui";
+    let sub = " — Apple Reminders";
+    let pad = (area.width as usize).saturating_sub(title.len() + sub.len() + clock.len() + 1);
+    let line = Line::from(vec![
+        Span::styled(title, Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(sub, theme::muted()),
+        Span::raw(" ".repeat(pad)),
+        Span::styled(clock, theme::muted()),
+        Span::raw(" "),
+    ]);
+    frame.render_widget(
+        Paragraph::new(line).style(Style::default().bg(theme::PANEL)),
+        area,
+    );
+}
+
+fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect, rects: &mut Rects) {
+    let block = Block::default()
+        .borders(Borders::RIGHT)
+        .border_style(theme::border());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    app.show_logo = frame.area().height >= LOGO_MIN_HEIGHT;
+    let logo_rows = if app.show_logo { 4 } else { 0 };
+    let [_, logo, nav] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(logo_rows),
+        Constraint::Min(1),
+    ])
+    .areas(inner);
+    if app.show_logo {
+        let lines = rows::logo();
+        let width = rows::line_width(&lines[0]);
+        let pad = (logo.width as usize).saturating_sub(width) / 2;
+        let centered: Vec<Line> = lines
+            .into_iter()
+            .map(|mut l| {
+                l.spans.insert(0, Span::raw(" ".repeat(pad)));
+                l
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(centered), logo);
+    }
+    let nav = Rect {
+        x: nav.x + 1,
+        width: nav.width.saturating_sub(2),
+        ..nav
+    };
+    rects.nav_rows = nav;
+    frame.render_widget(Clear, nav);
+    // keep the highlight on screen
+    let height = nav.height as usize;
+    if app.nav_cursor < app.nav_scroll {
+        app.nav_scroll = app.nav_cursor;
+    }
+    if height > 0 && app.nav_cursor >= app.nav_scroll + height {
+        app.nav_scroll = app.nav_cursor + 1 - height;
+    }
+    let focused = app.focus == Pane::Nav;
+    let width = nav.width as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (index, item) in app.nav.iter().enumerate().skip(app.nav_scroll).take(height) {
+        let mut line = match item {
+            NavItem::Header(label) => rows::nav_header(label),
+            NavItem::Blank => Line::default(),
+            NavItem::Smart(view) => rows::smart_row(*view, width),
+            NavItem::List(i) => rows::list_row(&app.lists[*i], width),
+        };
+        if index == app.nav_cursor && item.selectable() {
+            let used = rows::line_width(&line);
+            line.spans
+                .push(Span::raw(" ".repeat(width.saturating_sub(used))));
+            line = line.style(theme::cursor(focused));
+        }
+        lines.push(line);
+    }
+    frame.render_widget(Paragraph::new(lines), nav);
+}
+
+fn draw_main(frame: &mut Frame, app: &mut App, area: Rect, rects: &mut Rects) {
+    let filter_rows = if app.filter.is_some() { 3 } else { 0 };
+    let bar_rows = if app
+        .current_list()
+        .is_some_and(|l| l.active + l.completed > 0)
+    {
+        1
+    } else {
+        0
+    };
+    let [_, title, stats, bar, _, filter, list] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(bar_rows),
+        Constraint::Length(1),
+        Constraint::Length(filter_rows),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+    let indent = |r: Rect| Rect {
+        x: r.x + 2,
+        width: r.width.saturating_sub(4),
+        ..r
+    };
+    draw_view_header(frame, app, indent(title), indent(stats), indent(bar));
+    if let Some(field) = &app.filter {
+        let focused = app.focus == Pane::Filter;
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(if focused {
+                theme::PRIMARY
+            } else {
+                theme::BORDER
+            }));
+        let inner = block.inner(indent(filter));
+        frame.render_widget(block, indent(filter));
+        rects.filter = indent(filter);
+        draw_field(frame, field, inner, focused, "filter…");
+    }
+    draw_list(frame, app, indent(list), rects);
+}
+
+fn draw_view_header(frame: &mut Frame, app: &App, title: Rect, stats: Rect, bar: Rect) {
+    let (icon, label, color) = match app.view {
+        crate::app::ViewKind::Smart(v) => (
+            v.icon().to_string(),
+            v.label().to_string(),
+            theme::hex(v.color_hex()),
+        ),
+        crate::app::ViewKind::List(_) => match app.current_list() {
+            Some(l) => (
+                if l.emoji.is_empty() {
+                    "●".to_string()
+                } else {
+                    l.emoji.clone()
+                },
+                l.title.clone(),
+                theme::hex(&l.color_hex),
+            ),
+            None => ("●".to_string(), String::new(), theme::PRIMARY),
+        },
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!("{icon} "), theme::fg(color)),
+            Span::styled(
+                label,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        title,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(app.stats_line(), theme::muted()))),
+        stats,
+    );
+    if bar.height > 0
+        && let Some(list) = app.current_list()
+    {
+        let total = (list.active + list.completed).max(1) as f64;
+        let ratio = list.completed as f64 / total;
+        let width = 26usize.min(bar.width.saturating_sub(6) as usize);
+        let filled = (ratio * width as f64).round() as usize;
+        let line = Line::from(vec![
+            Span::styled("━".repeat(filled), theme::fg(theme::SUCCESS)),
+            Span::styled("━".repeat(width - filled), theme::fg(theme::PANEL)),
+            Span::styled(
+                format!(" {:>3}%", (ratio * 100.0).round() as i64),
+                theme::muted(),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(line), bar);
+    }
+}
+
+impl App {
+    /// The counts line under the view title.
+    pub fn stats_line(&self) -> String {
+        let shown = self.shown.len();
+        let mut parts: Vec<String> = Vec::new();
+        match self.current_list() {
+            Some(list) => {
+                parts.push(format!("{} active", list.active));
+                if list.completed > 0 {
+                    parts.push(format!("{} done", list.completed));
+                }
+            }
+            None => parts.push(format!(
+                "{shown} reminder{}",
+                if shown == 1 { "" } else { "s" }
+            )),
+        }
+        if !self.filter_text.is_empty() {
+            parts.push(format!(
+                "filter \"{}\" → {shown} match{}",
+                self.filter_text,
+                if shown == 1 { "" } else { "es" }
+            ));
+        }
+        if self.loading {
+            parts.push("loading…".into());
+        }
+        parts.join(" · ")
+    }
+
+    /// The message shown when the list is empty.
+    pub fn empty_message(&self) -> String {
+        if !self.filter_text.is_empty() {
+            return format!("○  nothing matches \"{}\"", self.filter_text);
+        }
+        match self.view {
+            crate::app::ViewKind::List(_) => "○  no reminders here — press a to add one".into(),
+            crate::app::ViewKind::Smart(v) => format!("✓  {}", v.empty_message()),
+        }
+    }
+}
+
+fn draw_list(frame: &mut Frame, app: &mut App, area: Rect, rects: &mut Rects) {
+    rects.list_rows = area;
+    frame.render_widget(Clear, area);
+    let now = crate::dates::now();
+    let width = area.width as usize;
+    if app.shown.is_empty() {
+        if app.view_loaded && !app.loading {
+            let message = app.empty_message();
+            let y = area.y + area.height / 3;
+            let x = area.x
+                + (area.width as usize).saturating_sub(UnicodeWidthStr::width(message.as_str()))
+                    as u16
+                    / 2;
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    message,
+                    Style::default()
+                        .fg(theme::MUTED)
+                        .add_modifier(Modifier::ITALIC),
+                ))),
+                Rect {
+                    x,
+                    y,
+                    width: area.width.saturating_sub(x - area.x),
+                    height: 1,
+                },
+            );
+        }
+        app.ensure_visible(&[], area.height);
+        return;
+    }
+    let rendered: Vec<Vec<Line<'static>>> = app
+        .shown
+        .iter()
+        .map(|&i| {
+            let r = &app.reminders[i];
+            rows::reminder_lines(r, now, width, app.is_pending(r.id))
+        })
+        .collect();
+    let heights: Vec<u16> = rendered.iter().map(|ls| ls.len() as u16).collect();
+    app.ensure_visible(&heights, area.height);
+    let focused = app.focus == Pane::Reminders;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut y = area.y;
+    rects.row_spans.clear();
+    for (index, block) in rendered.into_iter().enumerate().skip(app.scroll) {
+        let h = block.len() as u16;
+        if y + h > area.y + area.height {
+            break;
+        }
+        rects.row_spans.push((y, h));
+        y += h;
+        let is_cursor = index == app.cursor;
+        for mut line in block {
+            if is_cursor {
+                let used = rows::line_width(&line);
+                line.spans
+                    .push(Span::raw(" ".repeat(width.saturating_sub(used))));
+                line = line.style(theme::cursor(focused));
+            }
+            lines.push(line);
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Draw a text field's value with the cursor placed when focused.
+pub fn draw_field(frame: &mut Frame, field: &Field, area: Rect, focused: bool, placeholder: &str) {
+    let text = if field.value.is_empty() && !focused {
+        Span::styled(placeholder.to_string(), theme::muted())
+    } else if field.value.is_empty() {
+        Span::styled(placeholder.to_string(), theme::dim())
+    } else {
+        Span::raw(field.value.clone())
+    };
+    frame.render_widget(Paragraph::new(Line::from(vec![Span::raw(" "), text])), area);
+    if focused {
+        let offset: u16 = field
+            .value
+            .chars()
+            .take(field.cursor)
+            .map(|c| UnicodeWidthStr::width(c.to_string().as_str()) as u16)
+            .sum();
+        frame.set_cursor_position((
+            (area.x + 1 + offset).min(area.x + area.width.saturating_sub(1)),
+            area.y,
+        ));
+    }
+}
+
+fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let selection_actions = [
+        Action::Edit,
+        Action::ToggleDone,
+        Action::Delete,
+        Action::ToggleFlag,
+        Action::CyclePriority,
+    ];
+    for binding in BINDINGS.iter().filter(|b| b.shown) {
+        if binding.action == Action::BearTriage && !app.bear_enabled() {
+            continue;
+        }
+        let key = app.keymap.display_key(binding.id);
+        if key.is_empty() {
+            continue;
+        }
+        let grayed = selection_actions.contains(&binding.action) && !app.has_selection();
+        let key_style = if grayed {
+            Style::default()
+                .fg(theme::MUTED)
+                .add_modifier(Modifier::DIM)
+        } else {
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD)
+        };
+        let label_style = if grayed { theme::dim() } else { theme::muted() };
+        spans.push(Span::styled(format!(" {key} "), key_style));
+        spans.push(Span::styled(format!("{} ", binding.label), label_style));
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::PANEL)),
+        area,
+    );
+}
+
+fn draw_toasts(frame: &mut Frame, app: &App, area: Rect) {
+    let width = 50u16.min(area.width.saturating_sub(4));
+    let mut bottom = area.y + area.height;
+    for toast in app.toasts.iter().rev() {
+        let color = match toast.severity {
+            Severity::Information => theme::PRIMARY,
+            Severity::Warning => theme::WARNING,
+            Severity::Error => theme::ERROR,
+        };
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        if !toast.title.is_empty() {
+            lines.push(Line::from(Span::styled(
+                toast.title.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+        }
+        lines.push(Line::from(toast.message.clone()));
+        let text_width = width.saturating_sub(4).max(1) as usize;
+        let text_rows: usize = lines
+            .iter()
+            .map(|l| {
+                UnicodeWidthStr::width(l.to_string().as_str())
+                    .div_ceil(text_width)
+                    .max(1)
+            })
+            .sum();
+        let height = (text_rows + 2) as u16;
+        if bottom < area.y + height {
+            break;
+        }
+        let rect = Rect {
+            x: area.x + area.width - width - 1,
+            y: bottom - height,
+            width,
+            height,
+        };
+        bottom = rect.y;
+        frame.render_widget(Clear, rect);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(color));
+        let inner = block.inner(rect);
+        frame.render_widget(block, rect);
+        frame.render_widget(
+            Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }),
+            inner,
+        );
+    }
+}
+
+/// A centered rect of at most `w` × `h` inside `area`.
+pub fn centered(area: Rect, w: u16, h: u16) -> Rect {
+    let w = w.min(area.width);
+    let h = h.min(area.height);
+    Rect {
+        x: area.x + (area.width - w) / 2,
+        y: area.y + (area.height - h) / 2,
+        width: w,
+        height: h,
+    }
+}
+
+/// Clear and frame a dialog; returns the inner rect.
+pub fn dialog(
+    frame: &mut Frame,
+    area: Rect,
+    w: u16,
+    h: u16,
+    title: &str,
+    color: ratatui::style::Color,
+) -> Rect {
+    let rect = centered(area, w, h);
+    frame.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(Style::default().fg(color))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    Rect {
+        x: inner.x + 2,
+        width: inner.width.saturating_sub(4),
+        ..inner
+    }
+}
+
+fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect, overlay: &Overlay) {
+    match overlay {
+        Overlay::Help { scroll } => {
+            let body = help::lines(app.bear_enabled());
+            let height = (body.len() as u16 + 4).min(area.height.saturating_sub(2));
+            let inner = dialog(
+                frame,
+                area,
+                60,
+                height,
+                "⌨  Keyboard Reference",
+                theme::ACCENT,
+            );
+            let rows = inner.height.saturating_sub(2) as usize;
+            let max_scroll = body.len().saturating_sub(rows);
+            let wanted = *scroll;
+            let scroll = wanted.min(max_scroll);
+            if scroll != wanted {
+                app.overlay = Some(Overlay::Help { scroll });
+            }
+            let shown: Vec<Line> = body.into_iter().skip(scroll).take(rows).collect();
+            let [text, _, foot] = Layout::vertical([
+                Constraint::Min(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .areas(inner);
+            frame.render_widget(Paragraph::new(shown), text);
+            let hint = "esc to close";
+            let x = foot.x + (foot.width as usize).saturating_sub(hint.len()) as u16 / 2;
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(hint, theme::dim()))),
+                Rect {
+                    x,
+                    width: foot.width.saturating_sub(x - foot.x),
+                    ..foot
+                },
+            );
+        }
+    }
+}
+
+impl SmartView {
+    /// The sidebar row index of a smart view (after the header).
+    pub fn nav_index(self) -> usize {
+        1 + SmartView::ALL.iter().position(|v| *v == self).unwrap_or(0)
+    }
+}

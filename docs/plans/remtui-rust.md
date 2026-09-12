@@ -100,7 +100,7 @@ header with stats and bar, empty states, filter (`/`, live, `esc`), `c`, `r`,
 navigation incl. vim profile (`gg` chord, half/full page), pane switching,
 mouse, help overlay, `q`, `--demo`. `Harness` lands here with the UI tests.
 Verify: `cargo test && cargo clippy --all-targets -- -D warnings`
-Status: [ ]
+Status: [x] done 2026-09-11 (74 passed: 42 unit, 11 client, 5 bear, 16 UI; demo checked in tmux)
 
 ### Phase 9 — Mutations
 Add/edit form (title, notes, due, priority, list, flag, `ctrl+s`, `ctrl+e`
