@@ -1,7 +1,7 @@
 # remtui in Rust
 Bear mirror: D5618AF6-EABA-4A95-BA6D-FB62D9E03D6F
 
-Status: in progress, started 2026-09-11.
+Status: complete 2026-09-11; all phases done, acceptance gate passed.
 
 A re-implementation of remtui (`~/GitHub/remtui`, Python + Textual) in Rust with
 ratatui, following the bjorn-rust port: same remctl and bearcli contracts, same
@@ -130,4 +130,4 @@ Status: [x] done 2026-09-11 (101 passed: 46 unit, 11 client, 5 bear, 16 UI, 12 w
    this repo's README.
 4. `./install.sh`, then `~/bin/remtui-rs --demo` from a fresh shell.
 Verify: the four steps above, in order, all passing
-Status: [ ]
+Status: [x] done 2026-09-11 — remtui's pytest suite 120 passed against the Rust fakes; remtui-gate GATE PASSED on the live inbox list, plain and --with-flag (scratch reminder added and deleted); benchmarks in README (keypress 69 ms → 0.11 ms, RSS 52 → 9 MB); ~/bin/remtui-rs --demo from a clean shell
