@@ -5,7 +5,8 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUST_GATE="$HERE/../target/release/remtui-gate"
-PY_DIR="${REMTUI_PY_DIR:-$HOME/GitHub/remtui}"
+# The Python remtui: $REMTUI_PY_DIR, else a `remtui-python` checkout beside this one.
+PY_DIR="${REMTUI_PY_DIR:-$HERE/../../remtui-python}"
 
 run() {
     local label="$1"; shift

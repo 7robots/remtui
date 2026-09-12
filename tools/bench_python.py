@@ -1,7 +1,7 @@
 """Headless timings for the Python remtui, printed as the same key=value
 lines `remtui-gate --bench` prints for the Rust build.
 
-    cd ~/GitHub/remtui && uv run python ~/GitHub/remtui-rust/tools/bench_python.py
+    cd ../remtui-python && uv run python ../remtui/tools/bench_python.py
 """
 
 from __future__ import annotations

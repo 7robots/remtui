@@ -3,7 +3,7 @@ Bear mirror: D5618AF6-EABA-4A95-BA6D-FB62D9E03D6F
 
 Status: complete 2026-09-11; all phases done, acceptance gate passed.
 
-A re-implementation of remtui (`~/GitHub/remtui`, Python + Textual) in Rust with
+A re-implementation of remtui (`~/GitHub/remtui-python`, Python + Textual; archived) in Rust with
 ratatui, following the bjorn-rust port: same remctl and bearcli contracts, same
 config file, same fakes, native binary. Feature parity with remtui at commit
 `eb24c5b` is the target; the Python repo is untouched and keeps working, since

@@ -7,9 +7,9 @@ does the same. This plugin rewrites those commands to the Rust `fake-remctl` /
 the Rust fake honours the same contract. The state files and their env vars are
 unchanged.
 
-    cd ~/GitHub/remtui
-    REMTUI_RUST_BIN=~/GitHub/remtui-rust/target/release \
-      PYTHONPATH=~/GitHub/remtui-rust/tools uv run pytest -p pytest_rust_fake -q
+    cd ../remtui-python
+    REMTUI_RUST_BIN=../remtui/target/release \
+      PYTHONPATH=../remtui/tools uv run pytest -p pytest_rust_fake -q
 """
 
 from __future__ import annotations
@@ -18,10 +18,8 @@ import os
 from pathlib import Path
 
 RUST_BIN = Path(
-    os.environ.get(
-        "REMTUI_RUST_BIN",
-        str(Path.home() / "GitHub" / "remtui-rust" / "target" / "release"),
-    )
+    os.environ.get("REMTUI_RUST_BIN")
+    or Path(__file__).resolve().parents[1] / "target" / "release"
 )
 
 

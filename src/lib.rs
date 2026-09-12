@@ -1,7 +1,7 @@
 //! remtui: a terminal front end for Apple Reminders, talking to Reminders only
 //! through `remctl`, and to Bear through `bearcli` for todo triage.
 //!
-//! Module names mirror the Python implementation (`~/GitHub/remtui`) so the two
+//! Module names mirror the Python implementation (`~/GitHub/remtui-python`, archived) so the two
 //! trees can be read side by side.
 
 pub mod app;

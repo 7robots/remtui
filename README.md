@@ -20,18 +20,19 @@ Requires macOS with Apple Reminders, remctl installed and onboarded, and a
 Rust toolchain (`brew install rustup && rustup default stable`).
 
 ```sh
-git clone https://github.com/7robots/remtui-rust.git
-cd remtui-rust
-./install.sh          # builds --release, puts a `remtui-rs` launcher in ~/bin
-remtui-rs             # or: cargo run --release --bin remtui
-remtui-rs --demo      # sample reminders and Bear notes through the built-in fakes
-remtui-rs --vim       # the vim key profile (gg/G, ctrl+d/u/f/b, :, o)
+git clone https://github.com/7robots/remtui.git
+cd remtui
+./install.sh          # builds --release, puts a `remtui` launcher in ~/bin
+remtui                # or: cargo run --release --bin remtui
+remtui --demo         # sample reminders and Bear notes through the built-in fakes
+remtui --vim          # the vim key profile (gg/G, ctrl+d/u/f/b, :, o)
 ```
 
-The launcher is `remtui-rs` so the Python `remtui` can stay installed beside it;
-[librarian](https://github.com/7robots/librarian) embeds the Python panel
-in-process and keeps using it. `--remctl PATH` or `REMTUI_REMCTL` point at a
-specific remctl binary.
+The Python original is archived at
+[7robots/remtui-python](https://github.com/7robots/remtui-python);
+[librarian](https://github.com/7robots/librarian) still embeds its panel
+in-process. `--remctl PATH` or `REMTUI_REMCTL` point at a specific remctl
+binary.
 
 ## What differs from the Python remtui
 
@@ -83,8 +84,8 @@ cargo run --release --bin remtui-gate -- --bench
 The Python suite runs against the Rust fakes with the plugin in `tools/`:
 
 ```sh
-cd ~/GitHub/remtui
-REMTUI_RUST_BIN=~/GitHub/remtui-rust/target/release PYTHONPATH=~/GitHub/remtui-rust/tools \
+cd ../remtui-python
+REMTUI_RUST_BIN=../remtui/target/release PYTHONPATH=../remtui/tools \
   uv run pytest -p pytest_rust_fake -q
 ```
 

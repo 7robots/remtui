@@ -1,11 +1,10 @@
 # Roadmap
 
-Single source of truth for planned and deferred work in remtui-rust. The
+Single source of truth for planned and deferred work in remtui (the Rust build). The
 active plan lives in `docs/plans/remtui-rust.md`.
 
 ## Next
 
-- Decide whether `remtui-rs` replaces the Python `remtui` launcher in `~/bin`
   or the two keep coexisting. librarian embeds the Python panel in-process, so
   the Python package stays installed either way.
 

@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Builds the release binaries and installs a `remtui-rs` launcher into ~/bin
-# (or --dir DIR). The Python remtui's `remtui` launcher is left alone so the
-# two can be compared side by side. `git pull && ./install.sh` is the update path.
+# Builds the release binaries and installs a `remtui` launcher into ~/bin (or
+# --dir DIR). `git pull && ./install.sh` is the update path. The archived Python
+# remtui installed a launcher of the same name; run its `install.sh --uninstall`
+# first if it is still there.
 set -euo pipefail
 
-APP="remtui-rs"
+APP="remtui"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_DIR="$HOME/bin"
-SHARE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/remtui-rs/bin"
+SHARE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/remtui/bin"
 
 usage() {
     cat <<USAGE
@@ -16,8 +17,8 @@ Usage: ./install.sh [--dir DIR] [--uninstall]
   --dir DIR     install the launcher into DIR instead of $DEFAULT_DIR
   --uninstall   remove the launcher and the installed binaries
 
-Config lives in \${XDG_CONFIG_HOME:-\$HOME/.config}/remtui/config.toml, shared
-with the Python remtui, and is left alone by both install and uninstall.
+Config lives in \${XDG_CONFIG_HOME:-\$HOME/.config}/remtui/config.toml and is
+left alone by both install and uninstall.
 USAGE
 }
 
