@@ -109,7 +109,7 @@ confirm with the safe button focused, `space` done/undone, `p` priority cycle,
 `f` with optimistic toggle and pending glyph, toasts and remctl warnings,
 selection kept across reloads, header counts refreshed after every write.
 Verify: `cargo test && cargo clippy --all-targets -- -D warnings`
-Status: [ ]
+Status: [x] done 2026-09-11 (89 passed: 45 unit, 11 client, 5 bear, 16 UI, 12 writes; form and confirm checked in tmux)
 
 ### Phase 10 — Bear triage
 `b` behind `[bear] enabled`, grouped rows with note headers, mark/unmark,

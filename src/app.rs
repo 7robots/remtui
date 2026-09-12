@@ -15,12 +15,13 @@ use ratatui::layout::Rect;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::bear::BearClient;
-use crate::client::{RemctlClient, RemctlError};
+use crate::client::{RemctlClient, RemctlError, flag_target, warnings_of};
 use crate::config::{BearConfig, Config};
 use crate::editor::EditorJob;
 use crate::keys::{Action, Keymap};
 use crate::models::{Reminder, ReminderList, SmartView};
 use crate::ui::field::Field;
+use crate::ui::form::{Form, FormEvent};
 
 /// Two `g` presses this close together are `gg` in the vim profile.
 pub const GG_CHORD: Duration = Duration::from_millis(750);
@@ -74,16 +75,38 @@ pub struct Toast {
     pub expires: Instant,
 }
 
+/// What a confirmed dialog goes on to do.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pending {
+    Delete(Reminder),
+}
+
 /// A modal over the main screen.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Overlay {
-    Help { scroll: usize },
+    Help {
+        scroll: usize,
+    },
+    Form(Box<Form>),
+    Confirm {
+        title: String,
+        message: String,
+        confirm_label: String,
+        danger: bool,
+        /// The confirm button has focus (Cancel is focused first, so a stray
+        /// Enter right after `d` cannot delete).
+        focus_confirm: bool,
+        action: Pending,
+    },
 }
 
 impl Overlay {
     pub fn name(&self) -> &'static str {
         match self {
             Overlay::Help { .. } => "help",
+            Overlay::Form(_) => "form",
+            Overlay::Confirm { .. } => "confirm",
         }
     }
 }
@@ -98,6 +121,24 @@ pub enum Msg {
     View {
         generation: u64,
         result: Result<Vec<Reminder>, RemctlError>,
+    },
+    /// A done/undone/delete/priority write finished.
+    Mutated {
+        message: String,
+        result: Result<Option<serde_json::Value>, RemctlError>,
+    },
+    /// A flag/unflag write finished.
+    Flagged {
+        id: i64,
+        wanted: bool,
+        result: Result<Option<serde_json::Value>, RemctlError>,
+    },
+    /// The form's add or field edit finished.
+    Saved {
+        is_edit: bool,
+        /// A flag change to write once the field edit has landed.
+        follow_flag: Option<(i64, bool)>,
+        result: Result<Option<serde_json::Value>, RemctlError>,
     },
 }
 
@@ -336,6 +377,8 @@ impl App {
                 }
                 self.loading = false;
                 self.view_loaded = true;
+                // Remember the selection before the rows change under it.
+                let previous_id = self.selected().map(|r| r.id);
                 match result {
                     Ok(items) => self.reminders = items,
                     Err(err) => {
@@ -343,8 +386,63 @@ impl App {
                         self.reminders.clear();
                     }
                 }
-                self.populate();
+                self.populate_keeping(previous_id);
             }
+            Msg::Mutated { message, result } => match result {
+                Ok(_) => {
+                    if !message.is_empty() {
+                        self.notify(message, 3);
+                    }
+                    self.reload();
+                }
+                Err(err) => self.error(&err),
+            },
+            Msg::Flagged { id, wanted, result } => {
+                self.pending_flags.remove(&id);
+                match result {
+                    Ok(_) => self.reload(),
+                    Err(err) => {
+                        // revert the optimistic toggle
+                        if let Some(r) = self.reminders.iter_mut().find(|r| r.id == id) {
+                            r.flagged = !wanted;
+                        }
+                        self.error(&err);
+                    }
+                }
+            }
+            Msg::Saved {
+                is_edit,
+                follow_flag,
+                result,
+            } => match result {
+                Ok(payload) => {
+                    for warning in warnings_of(payload.as_ref()) {
+                        self.notify_titled("remctl", warning, Severity::Warning, 8);
+                    }
+                    self.overlay = None;
+                    self.notify(
+                        if is_edit {
+                            "✎ Reminder updated"
+                        } else {
+                            "＋ Reminder added"
+                        },
+                        3,
+                    );
+                    if let Some((id, wanted)) = follow_flag {
+                        let target = flag_target(payload.as_ref(), id);
+                        self.write_flag(target, wanted);
+                    }
+                    self.reload();
+                }
+                Err(err) => {
+                    if let Some(Overlay::Form(form)) = &mut self.overlay {
+                        form.error = format!("⚠ {}", err.message);
+                        form.saving = false;
+                    } else {
+                        self.error(&err);
+                    }
+                }
+            },
         }
     }
 
@@ -437,6 +535,10 @@ impl App {
         if view != self.view {
             self.view = view;
             self.clear_filter_state();
+            // A new view starts at the top; the old rows would otherwise pick
+            // the selection for it.
+            self.reminders.clear();
+            self.shown.clear();
             self.cursor = 0;
             self.scroll = 0;
             self.load_view();
@@ -460,6 +562,10 @@ impl App {
     /// clamped, so completing a row does not jump to the top.
     pub fn populate(&mut self) {
         let previous_id = self.selected().map(|r| r.id);
+        self.populate_keeping(previous_id);
+    }
+
+    fn populate_keeping(&mut self, previous_id: Option<i64>) {
         let previous_index = self.cursor;
         self.shown = self
             .reminders
@@ -736,6 +842,53 @@ impl App {
 
     fn overlay_key(&mut self, overlay: Overlay, key: &KeyEvent) {
         match overlay {
+            Overlay::Form(mut form) => {
+                let event = form.handle(key);
+                self.overlay = Some(Overlay::Form(form));
+                match event {
+                    FormEvent::None => {}
+                    FormEvent::Cancel => {
+                        if let Some(Overlay::Form(form)) = &self.overlay
+                            && !form.saving
+                        {
+                            self.overlay = None;
+                        }
+                    }
+                    FormEvent::Save => self.save_form(),
+                    FormEvent::Editor => self.open_notes_editor(),
+                }
+            }
+            Overlay::Confirm {
+                title,
+                message,
+                confirm_label,
+                danger,
+                focus_confirm,
+                action,
+            } => match key.code {
+                KeyCode::Esc | KeyCode::Char('n') => self.overlay = None,
+                KeyCode::Char('y') => {
+                    self.overlay = None;
+                    self.run_pending(action);
+                }
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    self.overlay = None;
+                    if focus_confirm {
+                        self.run_pending(action);
+                    }
+                }
+                KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => {
+                    self.overlay = Some(Overlay::Confirm {
+                        title,
+                        message,
+                        confirm_label,
+                        danger,
+                        focus_confirm: !focus_confirm,
+                        action,
+                    });
+                }
+                _ => {}
+            },
             Overlay::Help { scroll } => match key.code {
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => self.overlay = None,
                 KeyCode::Down | KeyCode::Char('j') => {
@@ -829,16 +982,210 @@ impl App {
     }
 
     pub fn editor_done(&mut self, job: EditorJob, outcome: std::io::Result<()>) {
-        let _ = (job, outcome);
+        let text = match outcome.and_then(|_| crate::editor::result(&job)) {
+            Ok(text) => Some(text),
+            Err(err) => {
+                self.notify_titled("editor", err.to_string(), Severity::Error, 8);
+                None
+            }
+        };
+        crate::editor::cleanup(&job);
+        if let (Some(text), Some(Overlay::Form(form))) = (text, &mut self.overlay) {
+            form.notes.set(&text);
+        }
     }
 
-    // -- mutations (Phase 9) and triage (Phase 10) ----------------------------
+    /// `ctrl+e` in the form: hand the notes to `$EDITOR`.
+    fn open_notes_editor(&mut self) {
+        let Some(Overlay::Form(form)) = &self.overlay else {
+            return;
+        };
+        if form.saving {
+            return;
+        }
+        let editor = crate::editor::resolve_editor(&|name| self.env(name));
+        match crate::editor::prepare(&form.notes.text, &editor) {
+            Ok(job) => self.editor_job = Some(job),
+            Err(err) => self.notify_titled("editor", err.to_string(), Severity::Error, 8),
+        }
+    }
 
-    fn add_reminder(&mut self) {}
-    fn edit_selected(&mut self) {}
-    fn toggle_done(&mut self) {}
-    fn delete_selected(&mut self) {}
-    fn toggle_flag(&mut self) {}
-    fn cycle_priority(&mut self) {}
+    // -- mutations ------------------------------------------------------------
+
+    fn spawn_mutation(
+        &mut self,
+        message: String,
+        work: impl std::future::Future<Output = Result<Option<serde_json::Value>, RemctlError>>
+        + Send
+        + 'static,
+    ) {
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = work.await;
+            let _ = tx.send(Msg::Mutated { message, result });
+        });
+    }
+
+    pub fn add_reminder(&mut self) {
+        if self.lists.is_empty() {
+            self.notify_titled("", "No lists loaded yet.", Severity::Warning, 5);
+            return;
+        }
+        let titles: Vec<String> = self.lists.iter().map(|l| l.title.clone()).collect();
+        let form = Form::new(None, &titles, &self.default_list_title());
+        self.overlay = Some(Overlay::Form(Box::new(form)));
+    }
+
+    pub fn edit_selected(&mut self) {
+        let Some(reminder) = self.selected().cloned() else {
+            return;
+        };
+        let titles: Vec<String> = self.lists.iter().map(|l| l.title.clone()).collect();
+        let form = Form::new(Some(&reminder), &titles, "");
+        self.overlay = Some(Overlay::Form(Box::new(form)));
+    }
+
+    /// `ctrl+s`/enter in the form: validate and write.
+    fn save_form(&mut self) {
+        let Some(Overlay::Form(form)) = &mut self.overlay else {
+            return;
+        };
+        if form.saving {
+            return;
+        }
+        if !form.validate() {
+            return;
+        }
+        form.saving = true;
+        form.error.clear();
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        let edit = form.reminder.as_ref().map(|r| (r.id, form.edit_fields()));
+        let add = form.add_fields();
+        match edit {
+            None => {
+                tokio::spawn(async move {
+                    let result = client.add(&add).await;
+                    let _ = tx.send(Msg::Saved {
+                        is_edit: false,
+                        follow_flag: None,
+                        result,
+                    });
+                });
+            }
+            Some((id, mut fields)) => {
+                let follow_flag = fields.flagged.take().map(|wanted| (id, wanted));
+                if !fields.has_field_edit() {
+                    // Only the flag changed (or nothing): dismiss now, write in the background.
+                    self.handle_msg(Msg::Saved {
+                        is_edit: true,
+                        follow_flag,
+                        result: Ok(None),
+                    });
+                    return;
+                }
+                tokio::spawn(async move {
+                    let result = client.edit(id, &fields).await;
+                    let _ = tx.send(Msg::Saved {
+                        is_edit: true,
+                        follow_flag,
+                        result,
+                    });
+                });
+            }
+        }
+    }
+
+    pub fn toggle_done(&mut self) {
+        let Some(r) = self.selected().cloned() else {
+            return;
+        };
+        let client = self.client.clone();
+        if r.completed {
+            self.spawn_mutation(format!("↺ Reopened “{}”", r.title), async move {
+                client.undone(r.id).await
+            });
+        } else {
+            self.spawn_mutation(format!("✓ Completed “{}”", r.title), async move {
+                client.done(r.id).await
+            });
+        }
+    }
+
+    pub fn delete_selected(&mut self) {
+        let Some(r) = self.selected().cloned() else {
+            return;
+        };
+        self.overlay = Some(Overlay::Confirm {
+            title: "🗑  Delete Reminder".into(),
+            message: format!(
+                "Delete “{}” from {}?\nThis cannot be undone.",
+                r.title, r.list_name
+            ),
+            confirm_label: "Delete".into(),
+            danger: true,
+            focus_confirm: false,
+            action: Pending::Delete(r),
+        });
+    }
+
+    fn run_pending(&mut self, action: Pending) {
+        match action {
+            Pending::Delete(r) => {
+                let client = self.client.clone();
+                self.spawn_mutation(format!("🗑 Deleted “{}”", r.title), async move {
+                    client.delete(r.id).await
+                });
+            }
+        }
+    }
+
+    /// `f`: toggle the flag optimistically and write it in the background.
+    pub fn toggle_flag(&mut self) {
+        let Some(r) = self.selected().cloned() else {
+            return;
+        };
+        if self.is_pending(r.id) {
+            return;
+        }
+        self.write_flag(r.id, !r.flagged);
+    }
+
+    /// Flip the row now, mark it pending, and let remctl catch up; a failure
+    /// reverts the row with an error toast.
+    pub fn write_flag(&mut self, id: i64, wanted: bool) {
+        if let Some(r) = self.reminders.iter_mut().find(|r| r.id == id) {
+            r.flagged = wanted;
+        }
+        self.pending_flags.insert(id);
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = if wanted {
+                client.flag(id).await
+            } else {
+                client.unflag(id).await
+            };
+            let _ = tx.send(Msg::Flagged { id, wanted, result });
+        });
+    }
+
+    pub fn cycle_priority(&mut self) {
+        let Some(r) = self.selected().cloned() else {
+            return;
+        };
+        let next = r.priority.next();
+        let client = self.client.clone();
+        let fields = crate::client::EditFields {
+            priority: Some(next.as_str().to_string()),
+            ..Default::default()
+        };
+        self.spawn_mutation(format!("Priority → {}", next.as_str()), async move {
+            client.edit(r.id, &fields).await
+        });
+    }
+
+    // -- triage (Phase 10) ----------------------------------------------------
+
     fn open_triage(&mut self) {}
 }

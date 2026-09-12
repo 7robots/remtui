@@ -3,6 +3,7 @@
 //! landed for mouse hit testing and clamps scrolling to the viewport.
 
 pub mod field;
+pub mod form;
 pub mod help;
 pub mod rows;
 pub mod theme;
@@ -18,6 +19,7 @@ use crate::app::{App, NavItem, Overlay, Pane, Rects, Severity};
 use crate::keys::{Action, BINDINGS};
 use crate::models::SmartView;
 use field::Field;
+use form::{BUTTONS, Focus, Form};
 
 pub const SIDEBAR_WIDTH: u16 = 30;
 /// The logo shows only when the terminal is at least this tall.
@@ -358,6 +360,30 @@ pub fn draw_field(frame: &mut Frame, field: &Field, area: Rect, focused: bool, p
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let mut spans: Vec<Span<'static>> = Vec::new();
+    let overlay_hints: Option<Vec<(&str, &str)>> = match &app.overlay {
+        Some(Overlay::Form(_)) => Some(vec![("esc", "Cancel"), ("^s", "Save"), ("^e", "Editor")]),
+        Some(Overlay::Confirm { confirm_label, .. }) => {
+            Some(vec![("esc", "Cancel"), ("y", confirm_label.as_str())])
+        }
+        Some(Overlay::Help { .. }) => Some(vec![("esc", "Close")]),
+        None => None,
+    };
+    if let Some(hints) = overlay_hints {
+        for (key, label) in hints {
+            spans.push(Span::styled(
+                format!(" {key} "),
+                Style::default()
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(format!("{label} "), theme::muted()));
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::PANEL)),
+            area,
+        );
+        return;
+    }
     let selection_actions = [
         Action::Edit,
         Action::ToggleDone,
@@ -485,6 +511,45 @@ pub fn dialog(
 
 fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect, overlay: &Overlay) {
     match overlay {
+        Overlay::Form(form) => draw_form(frame, area, form),
+        Overlay::Confirm {
+            title,
+            message,
+            confirm_label,
+            danger,
+            focus_confirm,
+            ..
+        } => {
+            let color = if *danger {
+                theme::ERROR
+            } else {
+                theme::SUCCESS
+            };
+            let lines: Vec<&str> = message.lines().collect();
+            let inner = dialog(frame, area, 58, lines.len() as u16 + 5, title, color);
+            let [text, _, buttons] = Layout::vertical([
+                Constraint::Length(lines.len() as u16),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .areas(inner);
+            frame.render_widget(
+                Paragraph::new(
+                    lines
+                        .iter()
+                        .map(|l| Line::from(l.to_string()))
+                        .collect::<Vec<_>>(),
+                ),
+                text,
+            );
+            draw_buttons(
+                frame,
+                buttons,
+                &["Cancel", confirm_label],
+                if *focus_confirm { 1 } else { 0 },
+                Some(color),
+            );
+        }
         Overlay::Help { scroll } => {
             let body = help::lines(app.bear_enabled());
             let height = (body.len() as u16 + 4).min(area.height.saturating_sub(2));
@@ -530,4 +595,165 @@ impl SmartView {
     pub fn nav_index(self) -> usize {
         1 + SmartView::ALL.iter().position(|v| *v == self).unwrap_or(0)
     }
+}
+
+/// Right-aligned buttons; the focused one is reversed, the last is the
+/// primary and takes `primary` as its color.
+fn draw_buttons(
+    frame: &mut Frame,
+    area: Rect,
+    labels: &[&str],
+    focused: usize,
+    primary: Option<ratatui::style::Color>,
+) {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut width = 0;
+    for (index, label) in labels.iter().enumerate() {
+        let text = format!("[ {label:^8} ]");
+        width += UnicodeWidthStr::width(text.as_str()) + 2;
+        let mut style = Style::default();
+        if index == labels.len() - 1
+            && let Some(color) = primary
+        {
+            style = style.fg(color).add_modifier(Modifier::BOLD);
+        }
+        if index == focused {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(text, style));
+    }
+    let pad = (area.width as usize).saturating_sub(width);
+    spans.insert(0, Span::raw(" ".repeat(pad)));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn labeled_box(frame: &mut Frame, area: Rect, title: &str, focused: bool) -> Rect {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(if focused {
+            theme::PRIMARY
+        } else {
+            theme::BORDER
+        }))
+        .title(Span::styled(format!(" {title} "), theme::muted()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    inner
+}
+
+fn draw_form(frame: &mut Frame, area: Rect, form: &Form) {
+    let height = 3 + 6 + 3 + 3 + 1 + 1 + 2;
+    let inner = dialog(frame, area, 62, height, form.heading(), theme::PRIMARY);
+    let [title, notes, row1, row2, error, _, buttons] = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(6),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    let box_inner = labeled_box(frame, title, "Title", form.focus == Focus::Title);
+    draw_field(
+        frame,
+        &form.title,
+        box_inner,
+        form.focus == Focus::Title,
+        form::TITLE_PLACEHOLDER,
+    );
+
+    let notes_inner = labeled_box(frame, notes, "Notes", form.focus == Focus::Notes);
+    let lines = form.notes.lines();
+    let (cursor_line, cursor_col) = form.notes.position();
+    let rows = notes_inner.height as usize;
+    let scroll = cursor_line.saturating_sub(rows.saturating_sub(1));
+    let shown: Vec<Line> = lines
+        .iter()
+        .skip(scroll)
+        .take(rows)
+        .map(|l| Line::from(format!(" {l}")))
+        .collect();
+    frame.render_widget(Paragraph::new(shown), notes_inner);
+    if form.focus == Focus::Notes {
+        let col: u16 = lines
+            .get(cursor_line)
+            .map(|l| {
+                l.chars()
+                    .take(cursor_col)
+                    .map(|c| UnicodeWidthStr::width(c.to_string().as_str()) as u16)
+                    .sum()
+            })
+            .unwrap_or(0);
+        frame.set_cursor_position((
+            (notes_inner.x + 1 + col).min(notes_inner.x + notes_inner.width.saturating_sub(1)),
+            notes_inner.y + (cursor_line - scroll) as u16,
+        ));
+    }
+
+    let [due, priority] =
+        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(row1);
+    let due_inner = labeled_box(frame, due, "Due", form.focus == Focus::Due);
+    draw_field(
+        frame,
+        &form.due,
+        due_inner,
+        form.focus == Focus::Due,
+        form::DUE_PLACEHOLDER,
+    );
+    let priority_inner = labeled_box(frame, priority, "Priority", form.focus == Focus::Priority);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::raw(form.priority.label().to_string()),
+            Span::styled(" ▾", theme::muted()),
+        ])),
+        priority_inner,
+    );
+
+    let [list, flag] =
+        Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(row2);
+    let list_inner = labeled_box(frame, list, "List", form.focus == Focus::List);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::raw(form.list_title()),
+            Span::styled(" ▾", theme::muted()),
+        ])),
+        list_inner,
+    );
+    let flag_inner = labeled_box(frame, flag, "", form.focus == Focus::Flag);
+    let mark = if form.flagged { "▣" } else { "▢" };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(format!(" {mark} ")),
+            Span::raw("Flagged "),
+            Span::styled("⚑", theme::fg(theme::FLAG)),
+        ])),
+        flag_inner,
+    );
+
+    if !form.error.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                form.error.clone(),
+                theme::fg(theme::ERROR),
+            ))),
+            error,
+        );
+    } else if form.saving {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled("saving…", theme::muted()))),
+            error,
+        );
+    }
+    let labels = [BUTTONS[0], BUTTONS[1], form.save_label()];
+    let focused = if form.focus == Focus::Buttons {
+        form.button
+    } else {
+        usize::MAX
+    };
+    draw_buttons(frame, buttons, &labels, focused, Some(theme::PRIMARY));
 }
