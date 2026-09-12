@@ -117,7 +117,7 @@ add marked (or current) with linked notes, `o` open in Bear at the section,
 `x` tick a done row after confirm, filter, reload, stats line, `bearcli`
 resolution (`$REMTUI_BEARCLI` > config > PATH), missing-bearcli message.
 Verify: `cargo test && cargo clippy --all-targets -- -D warnings`
-Status: [ ]
+Status: [x] done 2026-09-11 (101 passed: 46 unit, 11 client, 5 bear, 16 UI, 12 writes, 11 triage; triage checked in tmux)
 
 ### Phase 11 — Acceptance gate
 1. remtui's pytest suite passes with the Rust fakes swapped in through

@@ -7,6 +7,7 @@ pub mod form;
 pub mod help;
 pub mod rows;
 pub mod theme;
+pub mod triage;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -20,6 +21,7 @@ use crate::keys::{Action, BINDINGS};
 use crate::models::SmartView;
 use field::Field;
 use form::{BUTTONS, Focus, Form};
+use triage::{Triage, TriageLine};
 
 pub const SIDEBAR_WIDTH: u16 = 30;
 /// The logo shows only when the terminal is at least this tall.
@@ -365,6 +367,14 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         Some(Overlay::Confirm { confirm_label, .. }) => {
             Some(vec![("esc", "Cancel"), ("y", confirm_label.as_str())])
         }
+        Some(Overlay::Triage(_)) => Some(vec![
+            ("esc", "Close"),
+            ("space", "Mark"),
+            ("enter", "Add marked"),
+            ("o", "Open in Bear"),
+            ("x", "Tick in Bear"),
+            ("/", "Filter"),
+        ]),
         Some(Overlay::Help { .. }) => Some(vec![("esc", "Close")]),
         None => None,
     };
@@ -512,6 +522,11 @@ pub fn dialog(
 fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect, overlay: &Overlay) {
     match overlay {
         Overlay::Form(form) => draw_form(frame, area, form),
+        Overlay::Triage(triage) => {
+            let mut triage = (**triage).clone();
+            draw_triage(frame, area, &mut triage);
+            app.overlay = Some(Overlay::Triage(Box::new(triage)));
+        }
         Overlay::Confirm {
             title,
             message,
@@ -756,4 +771,121 @@ fn draw_form(frame: &mut Frame, area: Rect, form: &Form) {
         usize::MAX
     };
     draw_buttons(frame, buttons, &labels, focused, Some(theme::PRIMARY));
+}
+
+fn draw_triage(frame: &mut Frame, area: Rect, triage: &mut Triage) {
+    let height = (area.height as u32 * 9 / 10) as u16;
+    let inner = dialog(
+        frame,
+        area,
+        100,
+        height.max(10),
+        "🐻 Bear Todos",
+        theme::SECONDARY,
+    );
+    let filter_rows = if triage.filter.is_some() { 3 } else { 0 };
+    let [stats, _, filter, list, error, buttons] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(filter_rows),
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(triage.stats(), theme::muted()))),
+        stats,
+    );
+    if let Some(field) = &triage.filter {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(if triage.filter_focused {
+                theme::PRIMARY
+            } else {
+                theme::BORDER
+            }));
+        let field_inner = block.inner(filter);
+        frame.render_widget(block, filter);
+        draw_field(
+            frame,
+            field,
+            field_inner,
+            triage.filter_focused,
+            "filter todos…",
+        );
+    }
+    let width = list.width as usize;
+    let now = crate::dates::now();
+    if triage.lines.is_empty() {
+        if triage.loaded && !triage.loading {
+            let message = triage.empty_message();
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    message,
+                    Style::default()
+                        .fg(theme::MUTED)
+                        .add_modifier(Modifier::ITALIC),
+                ))),
+                Rect { height: 1, ..list },
+            );
+        } else if triage.loading {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled("loading…", theme::muted()))),
+                Rect { height: 1, ..list },
+            );
+        }
+    } else {
+        let rows = list.height as usize;
+        if triage.cursor < triage.scroll {
+            triage.scroll = triage.cursor;
+        }
+        if rows > 0 && triage.cursor >= triage.scroll + rows {
+            triage.scroll = triage.cursor + 1 - rows;
+        }
+        let mut rendered: Vec<Line<'static>> = Vec::new();
+        for (index, line) in triage
+            .lines
+            .iter()
+            .enumerate()
+            .skip(triage.scroll)
+            .take(rows)
+        {
+            let mut row = match line {
+                TriageLine::Blank => Line::default(),
+                TriageLine::Header { title, tags } => Triage::render_header(title, tags, width),
+                TriageLine::Todo(i) => triage.render_row(&triage.rows[*i], width, now),
+            };
+            if index == triage.cursor && matches!(line, TriageLine::Todo(_)) {
+                let used = rows::line_width(&row);
+                row.spans
+                    .push(Span::raw(" ".repeat(width.saturating_sub(used))));
+                row = row.style(theme::cursor(!triage.filter_focused));
+            }
+            rendered.push(row);
+        }
+        frame.render_widget(Clear, list);
+        frame.render_widget(Paragraph::new(rendered), list);
+    }
+    if !triage.error.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                triage.error.clone(),
+                theme::fg(theme::ERROR),
+            ))),
+            error,
+        );
+    } else if triage.adding {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled("adding…", theme::muted()))),
+            error,
+        );
+    }
+    draw_buttons(
+        frame,
+        buttons,
+        &["Close", "Add marked"],
+        usize::MAX,
+        Some(theme::PRIMARY),
+    );
 }

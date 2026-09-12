@@ -14,14 +14,17 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Rect;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::bear::BearClient;
+use crate::bear::{BearClient, BearError, bearcli_found, resolve_bearcli};
 use crate::client::{RemctlClient, RemctlError, flag_target, warnings_of};
 use crate::config::{BearConfig, Config};
 use crate::editor::EditorJob;
 use crate::keys::{Action, Keymap};
 use crate::models::{Reminder, ReminderList, SmartView};
+use crate::todos::TodoScan;
+use crate::triage::{Status, TriageRow, join, link_notes};
 use crate::ui::field::Field;
 use crate::ui::form::{Form, FormEvent};
+use crate::ui::triage::Triage;
 
 /// Two `g` presses this close together are `gg` in the vim profile.
 pub const GG_CHORD: Duration = Duration::from_millis(750);
@@ -79,6 +82,8 @@ pub struct Toast {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pending {
     Delete(Reminder),
+    /// Tick a done todo in Bear.
+    Tick(TriageRow),
 }
 
 /// A modal over the main screen.
@@ -89,6 +94,7 @@ pub enum Overlay {
         scroll: usize,
     },
     Form(Box<Form>),
+    Triage(Box<Triage>),
     Confirm {
         title: String,
         message: String,
@@ -98,6 +104,8 @@ pub enum Overlay {
         /// Enter right after `d` cannot delete).
         focus_confirm: bool,
         action: Pending,
+        /// The triage screen to bring back when this closes.
+        parent: Option<Box<Triage>>,
     },
 }
 
@@ -106,6 +114,7 @@ impl Overlay {
         match self {
             Overlay::Help { .. } => "help",
             Overlay::Form(_) => "form",
+            Overlay::Triage(_) => "triage",
             Overlay::Confirm { .. } => "confirm",
         }
     }
@@ -113,6 +122,7 @@ impl Overlay {
 
 /// Results of background work.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Msg {
     Lists {
         generation: u64,
@@ -132,6 +142,21 @@ pub enum Msg {
         id: i64,
         wanted: bool,
         result: Result<Option<serde_json::Value>, RemctlError>,
+    },
+    TriageLoaded {
+        result: Result<(TodoScan, Vec<Reminder>), String>,
+    },
+    TriageAdded {
+        added: usize,
+        failures: Vec<String>,
+        linked: Result<Vec<Reminder>, RemctlError>,
+    },
+    TriageOpened {
+        result: Result<(), BearError>,
+    },
+    TriageTicked {
+        row: TriageRow,
+        result: Result<(), BearError>,
     },
     /// The form's add or field edit finished.
     Saved {
@@ -407,6 +432,84 @@ impl App {
                             r.flagged = !wanted;
                         }
                         self.error(&err);
+                    }
+                }
+            }
+            Msg::TriageLoaded { result } => {
+                let Some(Overlay::Triage(triage)) = &mut self.overlay else {
+                    return;
+                };
+                triage.loading = false;
+                triage.loaded = true;
+                match result {
+                    Ok((scan, linked)) => {
+                        triage.error.clear();
+                        let rows = join(&scan.todos, &linked);
+                        triage.show(rows, scan.locked);
+                    }
+                    Err(message) => {
+                        triage.error = format!("⚠ {message}");
+                        triage.show(Vec::new(), 0);
+                    }
+                }
+            }
+            Msg::TriageAdded {
+                added,
+                failures,
+                linked,
+            } => {
+                if added > 0 {
+                    let target = match &self.overlay {
+                        Some(Overlay::Triage(t)) if !t.target_list.is_empty() => {
+                            t.target_list.clone()
+                        }
+                        _ => "Reminders".to_string(),
+                    };
+                    self.notify(format!("＋ {added} added to {target}"), 3);
+                }
+                let Some(Overlay::Triage(triage)) = &mut self.overlay else {
+                    return;
+                };
+                triage.adding = false;
+                if added > 0 {
+                    triage.added_any = true;
+                }
+                triage.error = if failures.is_empty() {
+                    String::new()
+                } else {
+                    format!("⚠ {}", failures.join("; "))
+                };
+                match linked {
+                    Ok(linked) => {
+                        let todos: Vec<_> = triage.rows.iter().map(|r| r.todo.clone()).collect();
+                        let locked = triage.locked;
+                        triage.show(join(&todos, &linked), locked);
+                    }
+                    Err(err) => triage.error = format!("⚠ {}", err.message),
+                }
+            }
+            Msg::TriageOpened { result } => {
+                if let (Err(err), Some(Overlay::Triage(triage))) = (result, &mut self.overlay) {
+                    triage.error = format!("⚠ {}", err.message);
+                }
+            }
+            Msg::TriageTicked { row, result } => {
+                let Some(Overlay::Triage(triage)) = &mut self.overlay else {
+                    return;
+                };
+                match result {
+                    Err(err) => triage.error = format!("⚠ {}", err.message),
+                    Ok(()) => {
+                        triage.error.clear();
+                        let keep = triage
+                            .current_row()
+                            .map(|r| (r.todo.key(), r.todo.line.clone()));
+                        triage.rows.retain(|r| {
+                            !(r.todo.key() == row.todo.key() && r.todo.line == row.todo.line)
+                        });
+                        triage.rebuild(keep);
+                        let text = row.todo.text.clone();
+                        self.notify(format!("✓ Ticked “{text}” in Bear"), 3);
                     }
                 }
             }
@@ -842,6 +945,7 @@ impl App {
 
     fn overlay_key(&mut self, overlay: Overlay, key: &KeyEvent) {
         match overlay {
+            Overlay::Triage(_) => self.triage_key(key),
             Overlay::Form(mut form) => {
                 let event = form.handle(key);
                 self.overlay = Some(Overlay::Form(form));
@@ -865,14 +969,15 @@ impl App {
                 danger,
                 focus_confirm,
                 action,
+                parent,
             } => match key.code {
-                KeyCode::Esc | KeyCode::Char('n') => self.overlay = None,
+                KeyCode::Esc | KeyCode::Char('n') => self.overlay = parent.map(Overlay::Triage),
                 KeyCode::Char('y') => {
-                    self.overlay = None;
+                    self.overlay = parent.map(Overlay::Triage);
                     self.run_pending(action);
                 }
                 KeyCode::Enter | KeyCode::Char(' ') => {
-                    self.overlay = None;
+                    self.overlay = parent.map(Overlay::Triage);
                     if focus_confirm {
                         self.run_pending(action);
                     }
@@ -885,6 +990,7 @@ impl App {
                         danger,
                         focus_confirm: !focus_confirm,
                         action,
+                        parent,
                     });
                 }
                 _ => {}
@@ -1126,6 +1232,7 @@ impl App {
             danger: true,
             focus_confirm: false,
             action: Pending::Delete(r),
+            parent: None,
         });
     }
 
@@ -1135,6 +1242,16 @@ impl App {
                 let client = self.client.clone();
                 self.spawn_mutation(format!("🗑 Deleted “{}”", r.title), async move {
                     client.delete(r.id).await
+                });
+            }
+            Pending::Tick(row) => {
+                let Some(bear) = self.bear.clone() else {
+                    return;
+                };
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    let result = bear.complete_todo(&row.todo).await;
+                    let _ = tx.send(Msg::TriageTicked { row, result });
                 });
             }
         }
@@ -1185,7 +1302,250 @@ impl App {
         });
     }
 
-    // -- triage (Phase 10) ----------------------------------------------------
+    // -- Bear triage ----------------------------------------------------------
 
-    fn open_triage(&mut self) {}
+    /// `b`: open the triage screen, resolving bearcli on first use.
+    pub fn open_triage(&mut self) {
+        if !self.bear_enabled() {
+            return;
+        }
+        if self.bear.is_none() {
+            let configured = self.bear_config.bearcli.clone();
+            if !bearcli_found(&configured) {
+                self.notify_titled(
+                    "Bear",
+                    format!(
+                        "bearcli not found ({}). It ships inside Bear.app; set [bear] bearcli in the config.",
+                        resolve_bearcli(&configured)
+                    ),
+                    Severity::Error,
+                    8,
+                );
+                return;
+            }
+            self.bear = Some(Arc::new(BearClient::new(vec![resolve_bearcli(
+                &configured,
+            )])));
+        }
+        let target = if self.bear_config.list.is_empty() {
+            self.default_list_title()
+        } else {
+            self.bear_config.list.clone()
+        };
+        self.overlay = Some(Overlay::Triage(Box::new(Triage::new(
+            &target,
+            &self.bear_config.due,
+        ))));
+        self.triage_load();
+    }
+
+    fn triage_load(&mut self) {
+        let Some(bear) = self.bear.clone() else {
+            return;
+        };
+        let Some(Overlay::Triage(triage)) = &mut self.overlay else {
+            return;
+        };
+        triage.loading = true;
+        let client = self.client.clone();
+        let tags = self.bear_config.tags.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let (scan, linked) =
+                tokio::join!(bear.search_todo_notes(&tags), client.linked_reminders());
+            let result = match (scan, linked) {
+                (Ok(scan), Ok(linked)) => Ok((scan, linked)),
+                (Err(err), _) => Err(err.message),
+                (_, Err(err)) => Err(err.message),
+            };
+            let _ = tx.send(Msg::TriageLoaded { result });
+        });
+    }
+
+    /// `esc` in triage: clear the filter if there is one, else close; the
+    /// panel reloads when anything was added.
+    fn triage_close(&mut self) {
+        let Some(Overlay::Triage(triage)) = &mut self.overlay else {
+            return;
+        };
+        if triage.filter.is_some() || !triage.filter_text.is_empty() {
+            triage.filter = None;
+            triage.filter_focused = false;
+            triage.filter_text.clear();
+            let keep = triage
+                .current_row()
+                .map(|r| (r.todo.key(), r.todo.line.clone()));
+            triage.rebuild(keep);
+            return;
+        }
+        if triage.adding {
+            return;
+        }
+        let added_any = triage.added_any;
+        self.overlay = None;
+        if added_any {
+            self.reload();
+        }
+    }
+
+    fn triage_key(&mut self, key: &KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(Overlay::Triage(triage)) = &mut self.overlay else {
+            return;
+        };
+        if triage.filter_focused {
+            match key.code {
+                KeyCode::Esc => self.triage_close(),
+                KeyCode::Enter | KeyCode::Tab | KeyCode::Down => triage.filter_focused = false,
+                _ if ctrl && key.code == KeyCode::Char('s') => triage.filter_focused = false,
+                _ => {
+                    if let Some(field) = &mut triage.filter
+                        && field.handle(key)
+                    {
+                        let text = field.value.trim().to_string();
+                        if text != triage.filter_text {
+                            triage.filter_text = text;
+                            let keep = triage
+                                .current_row()
+                                .map(|r| (r.todo.key(), r.todo.line.clone()));
+                            triage.rebuild(keep);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => self.triage_close(),
+            KeyCode::Char('j') | KeyCode::Down => triage.step(1),
+            KeyCode::Char('k') | KeyCode::Up => triage.step(-1),
+            KeyCode::Char(' ') => {
+                let Some(row) = triage.current_row().cloned() else {
+                    return;
+                };
+                if row.status() != Status::New {
+                    self.notify("Already in Reminders", 2);
+                    return;
+                }
+                triage.toggle_mark(&row.todo.key());
+            }
+            KeyCode::Enter => self.triage_add(),
+            KeyCode::Char('s') if ctrl => self.triage_add(),
+            KeyCode::Char('/') => {
+                if triage.filter.is_none() {
+                    triage.filter = Some(Field::new(&triage.filter_text));
+                }
+                triage.filter_focused = true;
+            }
+            KeyCode::Char('r') => self.triage_load(),
+            KeyCode::Char('o') => {
+                let (Some(row), Some(bear)) = (triage.current_row().cloned(), self.bear.clone())
+                else {
+                    return;
+                };
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    let result = bear.open_note(&row.todo).await;
+                    let _ = tx.send(Msg::TriageOpened { result });
+                });
+            }
+            KeyCode::Char('x') => {
+                let Some(row) = triage.current_row().cloned() else {
+                    return;
+                };
+                if row.status() != Status::Done {
+                    self.notify(
+                        "Only a todo whose reminder is done can be ticked in Bear",
+                        4,
+                    );
+                    return;
+                }
+                let parent = match self.overlay.take() {
+                    Some(Overlay::Triage(t)) => Some(t),
+                    _ => None,
+                };
+                self.overlay = Some(Overlay::Confirm {
+                    title: "✓  Tick in Bear".into(),
+                    message: format!(
+                        "Mark “{}” done in “{}”?\nThe line becomes - [x] and leaves this list.",
+                        row.todo.text, row.todo.note_title
+                    ),
+                    confirm_label: "Tick".into(),
+                    danger: false,
+                    focus_confirm: false,
+                    action: Pending::Tick(row),
+                    parent,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// Add the marked todos (or the current one) to Reminders, serially, then
+    /// re-join so the statuses update in place.
+    fn triage_add(&mut self) {
+        let Some(Overlay::Triage(triage)) = &mut self.overlay else {
+            return;
+        };
+        if triage.adding {
+            return;
+        }
+        let keys = match triage.add_targets() {
+            Ok(keys) => keys,
+            Err(message) => {
+                self.notify(message, 3);
+                return;
+            }
+        };
+        triage.adding = true;
+        let rows: Vec<TriageRow> = triage
+            .rows
+            .iter()
+            .filter(|r| r.status() == Status::New && keys.contains(&r.todo.key()))
+            .cloned()
+            .collect();
+        let target = triage.target_list.clone();
+        let due = triage.due.clone();
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let mut added = 0;
+            let mut failures = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for row in rows {
+                if !seen.insert(row.todo.key()) {
+                    continue;
+                }
+                let fields = crate::client::AddFields {
+                    title: row.todo.text.clone(),
+                    list_title: target.clone(),
+                    notes: link_notes(&row.todo),
+                    due: due.clone(),
+                    ..Default::default()
+                };
+                match client.add(&fields).await {
+                    Ok(result) => {
+                        for warning in warnings_of(result.as_ref()) {
+                            failures.push(warning);
+                        }
+                        added += 1;
+                    }
+                    Err(err) => failures.push(format!("{}: {}", row.todo.text, err.message)),
+                }
+            }
+            let linked = client.linked_reminders().await;
+            let _ = tx.send(Msg::TriageAdded {
+                added,
+                failures,
+                linked,
+            });
+        });
+    }
+
+    pub fn triage(&self) -> Option<&Triage> {
+        match &self.overlay {
+            Some(Overlay::Triage(t)) => Some(t),
+            _ => None,
+        }
+    }
 }
