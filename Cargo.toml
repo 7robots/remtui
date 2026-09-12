@@ -1,0 +1,53 @@
+[package]
+name = "remtui"
+description = "A terminal front end for Apple Reminders, driven by remctl"
+license = "MIT"
+authors = ["Jefferson Burson"]
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures = "0.3"
+ratatui = "0.30"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha1 = "0.11"
+shlex = "2"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "process", "sync", "time", "macros", "io-util", "fs"] }
+toml = "1"
+unicode-width = "0.2"
+
+[dev-dependencies]
+pretty_assertions = "1"
+
+[lib]
+name = "remtui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "remtui"
+path = "src/main.rs"
+
+[[bin]]
+name = "fake-remctl"
+path = "src/bin/fake_remctl.rs"
+
+[[bin]]
+name = "fake-bearcli"
+path = "src/bin/fake_bearcli.rs"
+
+[[bin]]
+name = "remtui-gate"
+path = "src/bin/remtui_gate.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
